@@ -36,9 +36,8 @@
 <main class="container py-4">
   <ul class="nav nav-pills mb-4 gap-2" role="tablist">
     <li class="nav-item"><button class="nav-link active" id="tab-chart" data-bs-toggle="pill" data-bs-target="#pane-chart" type="button" role="tab" aria-controls="pane-chart"><i class="bi bi-calendar-week me-1"></i>Chart</button></li>
-    <li class="nav-item"><button class="nav-link" id="tab-kids" data-bs-toggle="pill" data-bs-target="#pane-kids" type="button" role="tab" aria-controls="pane-kids"><i class="bi bi-people me-1"></i>Kids</button></li>
-    <li class="nav-item"><button class="nav-link" id="tab-chores" data-bs-toggle="pill" data-bs-target="#pane-chores" type="button" role="tab" aria-controls="pane-chores"><i class="bi bi-list-check me-1"></i>Chores</button></li>
     <li class="nav-item"><button class="nav-link" id="tab-rewards" data-bs-toggle="pill" data-bs-target="#pane-rewards" type="button" role="tab" aria-controls="pane-rewards"><i class="bi bi-trophy me-1"></i>Rewards</button></li>
+    <li class="nav-item"><button class="nav-link" id="tab-settings" data-bs-toggle="pill" data-bs-target="#pane-settings" type="button" role="tab" aria-controls="pane-settings"><i class="bi bi-gear me-1"></i>Settings</button></li>
   </ul>
 
   <!-- ============ TAB PANE WRAPPER ============ -->
@@ -70,8 +69,15 @@
     </p>
   </div>
 
+  <!-- ============ SETTINGS TAB (setup screens: kids + chores) ============ -->
+  <div class="tab-pane fade" id="pane-settings" role="tabpanel" aria-labelledby="tab-settings">
+    <ul class="nav nav-pills mb-3 gap-2 settings-subtabs" role="tablist">
+      <li class="nav-item"><button class="nav-link active" id="tab-sub-kids" data-bs-toggle="pill" data-bs-target="#pane-kids" type="button" role="tab" aria-controls="pane-kids"><i class="bi bi-people me-1"></i>Kids</button></li>
+      <li class="nav-item"><button class="nav-link" id="tab-sub-chores" data-bs-toggle="pill" data-bs-target="#pane-chores" type="button" role="tab" aria-controls="pane-chores"><i class="bi bi-list-check me-1"></i>Chores</button></li>
+    </ul>
+    <div class="tab-content settings-subpanes">
   <!-- ============ KIDS TAB ============ -->
-  <div class="tab-pane fade" id="pane-kids" role="tabpanel" aria-labelledby="tab-kids">
+  <div class="tab-pane fade" id="pane-kids" role="tabpanel" aria-labelledby="tab-sub-kids">
     <div class="row g-4">
       <div class="col-lg-5">
         <div class="card shadow-sm">
@@ -103,7 +109,7 @@
   </div>
 
   <!-- ============ CHORES TAB ============ -->
-  <div class="tab-pane fade" id="pane-chores" role="tabpanel" aria-labelledby="tab-chores">
+  <div class="tab-pane fade" id="pane-chores" role="tabpanel" aria-labelledby="tab-sub-chores">
     <div class="row g-4">
       <div class="col-lg-5">
         <div class="card shadow-sm">
@@ -145,6 +151,9 @@
       </div>
     </div>
   </div>
+
+    </div><!-- /.settings-subpanes -->
+  </div><!-- /#pane-settings -->
 
   <!-- ============ REWARDS TAB ============ -->
   <div class="tab-pane fade" id="pane-rewards" role="tabpanel" aria-labelledby="tab-rewards">

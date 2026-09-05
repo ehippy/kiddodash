@@ -666,6 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Tab switching refresh
   const tabActions = {
     'pane-chart': () => refreshWeek(),
+    'pane-settings': () => refreshWeek(),
     'pane-kids': () => refreshWeek(),
     'pane-chores': () => refreshWeek(),
     'pane-rewards': () => refreshRewards(),
