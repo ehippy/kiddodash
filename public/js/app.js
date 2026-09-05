@@ -154,22 +154,10 @@ async function refreshWeek() {
   // grid is already { choreId: { date: { kidId: completion } } }
   state.weekGrid = data.grid;
   state.weekDates = data.week.map((w) => w.date);
-  renderLegend();
   renderTodaySummary();
   loadWeek();
   loadKidsTab();
   loadChoresTab();
-}
-
-function renderLegend() {
-  const el = $('#legend');
-  if (!state.kids.length) {
-    el.innerHTML = '<span class="text-muted small">No kids yet — add them in the “Kids” tab.</span>';
-    return;
-  }
-  el.innerHTML = state.kids
-    .map((k) => `<span class="legend-chip" style="background:${esc(k.color)}">${esc(k.emoji)} ${esc(k.name)}</span>`)
-    .join('');
 }
 
 async function openCellPicker(choreId, date) {

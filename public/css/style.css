@@ -102,18 +102,6 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   margin-right: 4px;
 }
 
-/* Legend */
-.legend-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 12px;
-  border-radius: 999px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: #fff;
-}
-
 /* Kids */
 .kid-avatar {
   width: 44px;
