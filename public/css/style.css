@@ -21,10 +21,6 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   background-color: rgba(17, 24, 39, 0.06);
 }
 
-.chore-table tbody tr:hover > * {
-  background-color: rgba(13, 110, 253, 0.08);
-}
-
 .chore-table thead th {
   font-size: 0.8rem;
   text-transform: uppercase;
@@ -256,10 +252,6 @@ body[data-bs-theme="dark"] {
 
 [data-bs-theme="dark"] .chore-table tbody tr:nth-child(even) > * {
   background-color: rgba(255, 255, 255, 0.07);
-}
-
-[data-bs-theme="dark"] .chore-table tbody tr:hover > * {
-  background-color: #1e3a5f;
 }
 
 [data-bs-theme="dark"] .chore-table thead th {
