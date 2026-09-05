@@ -115,32 +115,9 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   flex-shrink: 0;
 }
 
-.progress {
-  height: 1.1rem;
-  border-radius: 999px;
-  background: #e9ecef;
-}
-
-.progress-bar {
-  border-radius: 999px;
-  font-weight: 700;
-  font-size: 0.75rem;
-  color: #fff;
-}
-
 .kid-points-badge {
   font-size: 0.8rem;
   font-weight: 700;
-}
-
-.rewardable-flag {
-  animation: bounce 1s infinite;
-  display: inline-block;
-}
-
-@keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
 }
 
 /* Today summary chips above the chart */
@@ -310,10 +287,6 @@ body[data-bs-theme="dark"] {
 
 [data-bs-theme="dark"] .freq-badge {
   filter: saturate(0.85);
-}
-
-[data-bs-theme="dark"] .progress {
-  background-color: #374151;
 }
 
 [data-bs-theme="dark"] .today-chip {

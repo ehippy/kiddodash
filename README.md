@@ -6,7 +6,7 @@ A self-hosted household chore chart for kids and families. Kids complete chores 
 
 - **Weekly chore chart** — daily, weekly (day-of-week), and "each kid, daily" (personal) chores
 - **Kid picker** — tap a cell to credit the chore to a kid; kids who already did a chore that day are hidden
-- **Points & rewards** — kids earn points from chores and spend their balance on a rewards menu; redemptions are recorded and the balance (earned − spent) drives the goal progress and 🏆 flag
+- **Points & rewards** — kids earn points from chores and spend their balance on a rewards menu; redemptions are recorded (balance = earned − spent)
 - **Light/dark theme** — follows system preference, with a manual toggle
 - **Zero external services** — Node.js + Express + built-in SQLite (`node:sqlite`), no build step
 
@@ -46,7 +46,7 @@ docker compose up -d --build app
 | `DATA_DIR`  | `./data`  | Where the DB and settings live |
 
 - `kiddodash.db` — kids, chores, completions (SQLite, WAL mode)
-- `settings.json` — points per completion, goal points, rewards
+- `settings.json` — points per completion, rewards
 
 ## API (summary)
 
@@ -60,7 +60,7 @@ docker compose up -d --build app
 | `GET/POST /api/completions` | Completions for a date / mark done         |
 | `DELETE /api/completions/:id` | Undo a completion                        |
 | `GET /api/week?offset=N`  | Week grid for the chart (±26 weeks)          |
-| `GET /api/totals`         | Per-kid earned / spent / balance vs. goal    |
+| `GET /api/totals`         | Per-kid earned / spent / balance             |
 | `POST /api/redeem`        | Spend a kid's points on a reward (400 if balance too low) |
 | `GET /api/redeemptions`   | Recent reward redemptions                    |
-| `GET/PUT /api/settings`   | Points, goal, rewards                        |
+| `GET/PUT /api/settings`   | Points, rewards                              |

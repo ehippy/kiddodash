@@ -6,7 +6,7 @@ const state = {
   kids: [],
   chores: [],
   settings: null,
-  kidTotals: [], // from /api/totals: earned, spent, balance, rewardable
+  kidTotals: [], // from /api/totals: earned, spent, balance
   recentSpends: [], // from /api/redeemptions
   weekOffset: 0, // 0 = current week
 };
@@ -241,16 +241,11 @@ function loadKidsTab() {
     list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-people"></i>No kids yet.</li>';
     return;
   }
-  $('#goalBadge').textContent = `Goal: ${state.settings?.goalPoints ?? '—'} pts`;
   list.innerHTML = state.kids
     .map((k) => {
       const t = state.kidTotals.find((x) => x.id === k.id);
-      const earned = t ? t.earned : k.points || 0;
       const spent = t ? t.spent : 0;
       const pts = t ? t.balance : k.points || 0;
-      const rewardable = t ? t.rewardable : false;
-      const goal = state.settings?.goalPoints || 1;
-      const pct = Math.min(100, Math.round((pts / goal) * 100));
       return `<li class="list-group-item">
         <div class="d-flex align-items-center gap-3">
           <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
@@ -259,12 +254,7 @@ function loadKidsTab() {
               <span class="fw-bold">${esc(k.name)}</span>
               <span class="kid-points-badge text-primary">${pts} pts
                 ${spent ? `<span class="text-muted small" title="${spent} points spent on rewards">(${spent} spent)</span>` : ''}
-                ${rewardable ? '<span class="rewardable-flag" title="Ready to redeem a reward!">🏆</span>' : ''}
               </span>
-            </div>
-            <div class="progress mt-1">
-              <div class="progress-bar" role="progressbar" style="width:${pct}%;background:${esc(k.color)}"
-                   aria-valuenow="${pts}" aria-valuemax="${goal}">${pct}%</div>
             </div>
           </div>
           <div class="btn-group btn-group-sm">
@@ -321,7 +311,6 @@ function loadChoresTab() {
 function loadRewardsTab() {
   const s = state.settings;
   if (!s) return;
-  $('#goalPoints').value = s.goalPoints;
   const list = $('#rewardsList');
   if (!s.rewards.length) {
     list.innerHTML = '<div class="empty-state"><i class="bi bi-trophy"></i>No rewards yet — add one!</div>';
@@ -360,21 +349,16 @@ function renderBalances() {
     list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-people"></i>No kids yet.</li>';
     return;
   }
-  const goal = state.settings?.goalPoints || 1;
+  const byId = new Map(state.kidTotals.map((t) => [t.id, t]));
   list.innerHTML = state.kidTotals
     .map((t) => {
-      const pct = Math.min(100, Math.round((t.balance / goal) * 100));
       return `<li class="list-group-item">
         <div class="d-flex align-items-center gap-3">
           <span class="kid-avatar" style="background:${esc(t.color)};width:34px;height:34px;font-size:1.05rem">${esc(t.emoji)}</span>
           <div class="flex-grow-1">
             <div class="d-flex justify-content-between align-items-baseline">
               <span class="fw-bold">${esc(t.name)}</span>
-              <span class="kid-points-badge text-primary">${t.balance} pts${t.rewardable ? ' 🏆' : ''}</span>
-            </div>
-            <div class="progress mt-1">
-              <div class="progress-bar" role="progressbar" style="width:${pct}%;background:${esc(t.color)}"
-                   aria-valuenow="${t.balance}" aria-valuemax="${goal}"></div>
+              <span class="kid-points-badge text-primary">${t.balance} pts</span>
             </div>
           </div>
         </div>
@@ -584,16 +568,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Rewards
-  $('#btnSaveGoal').addEventListener('click', async () => {
-    const goalPoints = Number($('#goalPoints').value);
-    if (!Number.isInteger(goalPoints) || goalPoints < 1) return toast('Enter a whole number ≥ 1', 'warning');
-    try {
-      await api('/api/settings', { method: 'PUT', body: { goalPoints } });
-      toast('Goal updated');
-      await Promise.all([refreshWeek(), loadRewardsTab()]);
-    } catch (err) { toast(err.message, 'danger'); }
-  });
-
   $('#btnAddReward').addEventListener('click', () => {
     $('#rewardId').value = '';
     $('#rewardLabel').value = '';

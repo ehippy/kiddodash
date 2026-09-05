@@ -118,12 +118,11 @@ function migrate() {
 migrate();
 
 // ---------------------------------------------------------------------------
-// Settings (points, goal, rewards)
+// Settings (rewards)
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SETTINGS = {
   pointsPerCompletion: 1,
-  goalPoints: 20,
   rewards: [
     { id: 1, label: 'Pick the dinner menu', points: 10 },
     { id: 2, label: 'Extra 30 min screen time', points: 15 },
@@ -473,7 +472,6 @@ app.post('/api/redeem', (req, res) => {
 // --- Totals / rewards -------------------------------------------------------------
 
 app.get('/api/totals', (req, res) => {
-  const settings = loadSettings();
   const kids = prepare('SELECT * FROM kids ORDER BY id').all();
   const earned = earnedTotals();
   const spent = spentTotals();
@@ -489,9 +487,7 @@ app.get('/api/totals', (req, res) => {
         emoji: k.emoji,
         earned: earnedPts,
         spent: spentPts,
-        balance,
-        goal: settings.goalPoints,
-        rewardable: balance >= settings.goalPoints
+        balance
       };
     })
   );
@@ -505,12 +501,6 @@ app.put('/api/settings', (req, res) => {
   const current = loadSettings();
   const body = req.body || {};
   const next = { ...current };
-  if (body.goalPoints !== undefined) {
-    if (!Number.isInteger(body.goalPoints) || body.goalPoints < 1) {
-      return sendError(res, 400, 'goalPoints must be a positive integer');
-    }
-    next.goalPoints = body.goalPoints;
-  }
   if (Array.isArray(body.rewards)) {
     next.rewards = body.rewards
       .filter((r) => r && String(r.label).trim())
