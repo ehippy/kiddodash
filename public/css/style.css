@@ -220,6 +220,13 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   width: 110px;
 }
 
+/* Rewards menu items */
+.reward-item {
+  border: 1px solid var(--bs-border-color, #dee2e6);
+  border-radius: 12px;
+  padding: 0.5rem 0.75rem;
+}
+
 /* Toast styling */
 .toast {
   border-radius: 12px;

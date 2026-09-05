@@ -49,6 +49,16 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_completions_date ON completions(done_date);
+
+  CREATE TABLE IF NOT EXISTS redemptions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kid_id       INTEGER NOT NULL REFERENCES kids(id) ON DELETE CASCADE,
+    reward_label TEXT NOT NULL,
+    points       INTEGER NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_redemptions_kid ON redemptions(kid_id);
 `);
 
 // ---------------------------------------------------------------------------
@@ -398,25 +408,92 @@ app.get('/api/week', (req, res) => {
   });
 });
 
+// --- Redemptions ------------------------------------------------------------------
+
+function earnedTotals() {
+  return new Map(
+    prepare('SELECT kid_id, COALESCE(SUM(points), 0) AS total FROM completions GROUP BY kid_id').all()
+      .map((t) => [t.kid_id, t.total])
+  );
+}
+
+function spentTotals() {
+  return new Map(
+    prepare('SELECT kid_id, COALESCE(SUM(points), 0) AS total FROM redemptions GROUP BY kid_id').all()
+      .map((t) => [t.kid_id, t.total])
+  );
+}
+
+// GET /api/redeemptions?limit=N  -> most recent spends
+app.get('/api/redeemptions', (req, res) => {
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+  res.json(
+    prepare(
+      `SELECT r.*, k.name AS kid_name, k.color AS kid_color, k.emoji AS kid_emoji
+         FROM redemptions r
+         JOIN kids k ON k.id = r.kid_id
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT ?`
+    ).all(limit)
+  );
+});
+
+// POST /api/redeem  { kidId, reward: { label, points } }
+app.post('/api/redeem', (req, res) => {
+  const { kidId, reward } = req.body || {};
+  const label = reward && String(reward.label || '').trim();
+  const points = reward && Number(reward.points);
+  if (!label) return sendError(res, 400, 'Reward label is required');
+  if (!Number.isInteger(points) || points <= 0) return sendError(res, 400, 'Reward points must be a positive integer');
+  const kid = prepare('SELECT * FROM kids WHERE id = ?').get(kidId);
+  if (!kid) return sendError(res, 404, 'Kid not found');
+  const earned = earnedTotals().get(kid.id) || 0;
+  const spent = spentTotals().get(kid.id) || 0;
+  const balance = earned - spent;
+  if (balance < points) return sendError(res, 400, `${kid.name} only has ${balance} point${balance === 1 ? '' : 's'}`);
+  try {
+    const info = prepare(
+      'INSERT INTO redemptions (kid_id, reward_label, points) VALUES (?, ?, ?)'
+    ).run(kid.id, label, points);
+    res.status(201).json({
+      id: info.lastInsertRowid,
+      kidId: kid.id,
+      kidName: kid.name,
+      kidEmoji: kid.emoji,
+      kidColor: kid.color,
+      rewardLabel: label,
+      points,
+      balance: balance - points
+    });
+  } catch (e) {
+    sendError(res, 500, e.message);
+  }
+});
+
 // --- Totals / rewards -------------------------------------------------------------
 
 app.get('/api/totals', (req, res) => {
   const settings = loadSettings();
   const kids = prepare('SELECT * FROM kids ORDER BY id').all();
-  const totals = new Map(
-    prepare('SELECT kid_id, SUM(points) AS total FROM completions GROUP BY kid_id').all()
-      .map((t) => [t.kid_id, t.total])
-  );
+  const earned = earnedTotals();
+  const spent = spentTotals();
   res.json(
-    kids.map((k) => ({
-      id: k.id,
-      name: k.name,
-      color: k.color,
-      emoji: k.emoji,
-      points: totals.get(k.id) || 0,
-      goal: settings.goalPoints,
-      rewardable: (totals.get(k.id) || 0) >= settings.goalPoints
-    }))
+    kids.map((k) => {
+      const earnedPts = earned.get(k.id) || 0;
+      const spentPts = spent.get(k.id) || 0;
+      const balance = earnedPts - spentPts;
+      return {
+        id: k.id,
+        name: k.name,
+        color: k.color,
+        emoji: k.emoji,
+        earned: earnedPts,
+        spent: spentPts,
+        balance,
+        goal: settings.goalPoints,
+        rewardable: balance >= settings.goalPoints
+      };
+    })
   );
 });
 

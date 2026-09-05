@@ -6,6 +6,8 @@ const state = {
   kids: [],
   chores: [],
   settings: null,
+  kidTotals: [], // from /api/totals: earned, spent, balance, rewardable
+  recentSpends: [], // from /api/redeemptions
   weekOffset: 0, // 0 = current week
 };
 
@@ -148,9 +150,13 @@ function loadWeek() {
 }
 
 async function refreshWeek() {
-  const data = await api('/api/week?offset=' + state.weekOffset);
+  const [data, totals] = await Promise.all([
+    api('/api/week?offset=' + state.weekOffset),
+    api('/api/totals'),
+  ]);
   state.kids = data.kids;
   state.chores = data.chores;
+  state.kidTotals = totals;
   // grid is already { choreId: { date: { kidId: completion } } }
   state.weekGrid = data.grid;
   state.weekDates = data.week.map((w) => w.date);
@@ -238,7 +244,11 @@ function loadKidsTab() {
   $('#goalBadge').textContent = `Goal: ${state.settings?.goalPoints ?? '—'} pts`;
   list.innerHTML = state.kids
     .map((k) => {
-      const pts = k.points || 0;
+      const t = state.kidTotals.find((x) => x.id === k.id);
+      const earned = t ? t.earned : k.points || 0;
+      const spent = t ? t.spent : 0;
+      const pts = t ? t.balance : k.points || 0;
+      const rewardable = t ? t.rewardable : false;
       const goal = state.settings?.goalPoints || 1;
       const pct = Math.min(100, Math.round((pts / goal) * 100));
       return `<li class="list-group-item">
@@ -248,7 +258,8 @@ function loadKidsTab() {
             <div class="d-flex justify-content-between align-items-baseline">
               <span class="fw-bold">${esc(k.name)}</span>
               <span class="kid-points-badge text-primary">${pts} pts
-                ${k.rewardable ? '<span class="rewardable-flag" title="Ready to redeem a reward!">🏆</span>' : ''}
+                ${spent ? `<span class="text-muted small" title="${spent} points spent on rewards">(${spent} spent)</span>` : ''}
+                ${rewardable ? '<span class="rewardable-flag" title="Ready to redeem a reward!">🏆</span>' : ''}
               </span>
             </div>
             <div class="progress mt-1">
@@ -313,20 +324,97 @@ function loadRewardsTab() {
   $('#goalPoints').value = s.goalPoints;
   const list = $('#rewardsList');
   if (!s.rewards.length) {
-    list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-trophy"></i>No rewards yet.</li>';
+    list.innerHTML = '<div class="empty-state"><i class="bi bi-trophy"></i>No rewards yet — add one!</div>';
     return;
   }
+  const byId = new Map(state.kidTotals.map((t) => [t.id, t]));
   list.innerHTML = s.rewards
-    .map(
-      (r) => `<li class="list-group-item d-flex align-items-center gap-2">
+    .map((r) => {
+      const kidOpts = state.kidTotals
+        .map((t) => {
+          const can = t.balance >= r.points;
+          return `<option value="${t.id}" ${can ? '' : 'disabled'}>
+            ${esc(t.emoji)} ${esc(t.name)} — ${t.balance} pts${can ? '' : ' (not enough)'}
+          </option>`;
+        })
+        .join('');
+      return `<div class="reward-item d-flex align-items-center gap-2">
           <i class="bi bi-gift text-primary fs-5"></i>
           <span class="fw-bold flex-grow-1">${esc(r.label)}</span>
           <span class="badge text-bg-warning">${r.points} pts</span>
+          <select class="form-select form-select-sm d-none d-sm-inline-block w-auto" data-redeemkid="${r.id}">
+            <option value="">Pick a kid…</option>${kidOpts}
+          </select>
+          <button class="btn btn-sm btn-primary" data-redeem="${r.id}" title="Redeem for the selected kid"><i class="bi bi-check-lg me-1"></i>Redeem</button>
           <button class="btn btn-sm btn-outline-secondary" data-editreward='${esc(JSON.stringify(r))}'><i class="bi bi-pencil"></i></button>
           <button class="btn btn-sm btn-outline-danger" data-delreward="${r.id}"><i class="bi bi-trash"></i></button>
-        </li>`
+        </div>`;
+    })
+    .join('');
+}
+
+function renderBalances() {
+  const list = $('#balancesList');
+  if (!list) return;
+  if (!state.kidTotals.length) {
+    list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-people"></i>No kids yet.</li>';
+    return;
+  }
+  const goal = state.settings?.goalPoints || 1;
+  list.innerHTML = state.kidTotals
+    .map((t) => {
+      const pct = Math.min(100, Math.round((t.balance / goal) * 100));
+      return `<li class="list-group-item">
+        <div class="d-flex align-items-center gap-3">
+          <span class="kid-avatar" style="background:${esc(t.color)};width:34px;height:34px;font-size:1.05rem">${esc(t.emoji)}</span>
+          <div class="flex-grow-1">
+            <div class="d-flex justify-content-between align-items-baseline">
+              <span class="fw-bold">${esc(t.name)}</span>
+              <span class="kid-points-badge text-primary">${t.balance} pts${t.rewardable ? ' 🏆' : ''}</span>
+            </div>
+            <div class="progress mt-1">
+              <div class="progress-bar" role="progressbar" style="width:${pct}%;background:${esc(t.color)}"
+                   aria-valuenow="${t.balance}" aria-valuemax="${goal}"></div>
+            </div>
+          </div>
+        </div>
+      </li>`;
+    })
+    .join('');
+}
+
+function renderRecentSpends() {
+  const list = $('#recentSpends');
+  if (!list) return;
+  if (!state.recentSpends?.length) {
+    list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-receipt"></i>No spends yet.</li>';
+    return;
+  }
+  list.innerHTML = state.recentSpends
+    .map(
+      (r) => `<li class="list-group-item d-flex align-items-center gap-2">
+        <span class="kid-avatar" style="background:${esc(r.kidColor)};width:28px;height:28px;font-size:0.9rem">${esc(r.kidEmoji)}</span>
+        <div class="flex-grow-1">
+          <div class="fw-bold">${esc(r.rewardLabel)}</div>
+          <div class="text-muted small">${esc(r.kidName)} · ${new Date(r.created_at + 'Z').toLocaleDateString()}</div>
+        </div>
+        <span class="badge text-bg-warning">−${r.points}</span>
+      </li>`
     )
     .join('');
+}
+
+async function refreshRewards() {
+  const [totals, spends] = await Promise.all([
+    api('/api/totals'),
+    api('/api/redeemptions?limit=8'),
+  ]);
+  state.kidTotals = totals;
+  state.recentSpends = spends;
+  renderBalances();
+  renderRecentSpends();
+  loadRewardsTab(); // re-render redeem selects with fresh balances
+  loadKidsTab(); // kid cards now show balance, not lifetime earned
 }
 
 /* ============================ Events ============================ */
@@ -515,6 +603,22 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   $('#rewardsList').addEventListener('click', async (e) => {
+    const redeem = e.target.closest('[data-redeem]');
+    if (redeem) {
+      const reward = state.settings.rewards.find((r) => r.id === Number(redeem.dataset.redeem));
+      if (!reward) return;
+      const sel = $(`[data-redeemkid="${reward.id}"]`);
+      const kidId = sel ? Number(sel.value) : 0;
+      if (!kidId) return toast('Pick a kid first', 'warning');
+      try {
+        const res = await api('/api/redeem', { method: 'POST', body: { kidId, reward } });
+        toast(`${res.kidEmoji} ${res.kidName} redeemed “${res.rewardLabel}”! (${res.balance} pts left)`);
+        await Promise.all([refreshRewards(), refreshWeek()]);
+      } catch (err) {
+        toast(err.message, 'danger');
+      }
+      return;
+    }
     const del = e.target.closest('[data-delreward]');
     if (del) {
       const ok = await confirmDialog('Delete this reward?');
@@ -564,7 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'pane-chart': () => refreshWeek(),
     'pane-kids': () => refreshWeek(),
     'pane-chores': () => refreshWeek(),
-    'pane-rewards': () => loadRewardsTab(),
+    'pane-rewards': () => refreshRewards(),
   };
   document.querySelectorAll('[data-bs-toggle="pill"]').forEach((btn) => {
     btn.addEventListener('shown.bs.tab', () => {
@@ -577,7 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
   Promise.all([api('/api/settings'), refreshWeek()])
     .then(([settings]) => {
       state.settings = settings;
-      loadRewardsTab();
+      refreshRewards();
     })
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));
 });

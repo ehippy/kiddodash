@@ -14,21 +14,25 @@ services:
     restart: unless-stopped
 
   # Development: hot reload for code changes.
-  # Usage:   docker compose --profile dev up -d --build
+  # Usage:   docker compose --profile dev up -d
   # Teardown: docker compose --profile dev down && docker compose up -d
+  #
+  # NOTE: server.js is a DIRECTORY bind mount (not a single-file mount):
+  # Docker Desktop's file sharing loses single-file binds when the host file
+  # is atomically replaced, which breaks hot reload.
   app-dev:
-    build: .
+    image: kiddodash-app:latest
     container_name: kiddodash-dev
     profiles: ["dev"]
     ports:
       - "8322:3000"
     volumes:
-      - ./server.js:/app/server.js:ro
-      - ./public:/app/public:ro
+      - .:/src:ro
       - kiddodash_data:/data
     environment:
       - NODE_ENV=development
       - DATA_DIR=/data
+    working_dir: /src
     command: ["node", "--watch", "server.js"]
     restart: "no"
 
