@@ -15,12 +15,14 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   min-width: 720px;
 }
 
-.chore-table tbody tr:nth-child(even) {
-  background-color: rgba(17, 24, 39, 0.045);
+/* Zebra striping: Bootstrap 5.3 paints each cell with --bs-table-bg (opaque),
+   so the tr background alone never shows — style the cells instead */
+.chore-table tbody tr:nth-child(even) > * {
+  background-color: rgba(17, 24, 39, 0.06);
 }
 
-.chore-table tbody tr:hover {
-  background-color: rgba(17, 24, 39, 0.08);
+.chore-table tbody tr:hover > * {
+  background-color: rgba(17, 24, 39, 0.1);
 }
 
 .chore-table thead th {
@@ -252,12 +254,12 @@ body[data-bs-theme="dark"] {
   background-color: transparent;
 }
 
-[data-bs-theme="dark"] .chore-table tbody tr:nth-child(even) {
-  background-color: rgba(255, 255, 255, 0.05);
+[data-bs-theme="dark"] .chore-table tbody tr:nth-child(even) > * {
+  background-color: rgba(255, 255, 255, 0.07);
 }
 
-[data-bs-theme="dark"] .chore-table tbody tr:hover {
-  background-color: rgba(255, 255, 255, 0.09);
+[data-bs-theme="dark"] .chore-table tbody tr:hover > * {
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
 [data-bs-theme="dark"] .chore-table thead th {
