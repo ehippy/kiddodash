@@ -1,0 +1,341 @@
+/* KiddoDash custom styles (on top of Bootstrap 5) */
+
+body {
+  font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  background-color: #f8f9fa;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
+  font-weight: 700;
+}
+
+/* Chore chart table */
+.chore-table {
+  min-width: 720px;
+}
+
+.chore-table tbody tr:nth-child(even) {
+  background-color: rgba(17, 24, 39, 0.045);
+}
+
+.chore-table tbody tr:hover {
+  background-color: rgba(17, 24, 39, 0.08);
+}
+
+.chore-table thead th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  vertical-align: bottom;
+  border-bottom: 2px solid #dee2e6;
+}
+
+.chore-table thead th.today-col {
+  color: #0d6efd;
+}
+
+.chore-table thead .today-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #0d6efd;
+  margin-left: 4px;
+}
+
+.chore-title-cell {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chore-pts {
+  display: inline-block;
+  font-size: 0.7rem;
+  background: #fff3cd;
+  color: #997404;
+  border-radius: 10px;
+  padding: 1px 8px;
+  margin-left: 6px;
+}
+
+/* Cells */
+.chore-cell {
+  min-width: 76px;
+  padding: 0.35rem 0.4rem !important;
+}
+
+.chore-cell .cell-btn {
+  width: 100%;
+  border: 2px dashed #ced4da;
+  border-radius: 12px;
+  background: #f8f9fa;
+  color: transparent;
+  padding: 0.5rem 0.4rem;
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.chore-cell .cell-btn:hover {
+  border-color: #0d6efd;
+  background: #e7f1ff;
+  transform: scale(1.04);
+}
+
+.chore-cell .cell-btn.week-off {
+  border-style: solid;
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+  transform: none;
+}
+
+.chore-cell .cell-btn.done {
+  border-style: solid;
+  border-color: transparent;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.chore-cell .cell-btn.done:hover {
+  filter: brightness(0.92);
+  transform: none;
+}
+
+.chore-cell .cell-btn.done .bi {
+  margin-right: 4px;
+}
+
+/* Legend */
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* Kids */
+.kid-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.progress {
+  height: 1.1rem;
+  border-radius: 999px;
+  background: #e9ecef;
+}
+
+.progress-bar {
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.75rem;
+  color: #fff;
+}
+
+.kid-points-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.rewardable-flag {
+  animation: bounce 1s infinite;
+  display: inline-block;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+/* Today tab cards */
+.today-card {
+  border-left: 6px solid var(--kid-color, #0d6efd);
+}
+
+.today-chore {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px dashed #e9ecef;
+}
+
+.today-chore:last-child {
+  border-bottom: none;
+}
+
+.today-chore .done-stamp {
+  margin-left: auto;
+  font-size: 1.2rem;
+}
+
+/* Pick-kid buttons in modal */
+.pick-kid-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  border: 2px solid #dee2e6;
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.55rem 0.8rem;
+  font-weight: 700;
+  transition: all 0.12s ease;
+}
+
+.pick-kid-btn:hover {
+  border-color: var(--kid-color);
+  background: color-mix(in srgb, var(--kid-color) 8%, white);
+  transform: translateY(-1px);
+}
+
+.pick-kid-btn .kid-avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 1.15rem;
+}
+
+/* Chores list */
+.chore-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.chore-row .freq-badge {
+  font-size: 0.7rem;
+}
+
+.day-select {
+  width: 110px;
+}
+
+/* Toast styling */
+.toast {
+  border-radius: 12px;
+}
+
+.empty-state {
+  text-align: center;
+  color: #9ca3af;
+  padding: 2rem 1rem;
+}
+
+.empty-state .bi {
+  font-size: 2.5rem;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+/* ============ Dark mode (on top of data-bs-theme="dark") ============ */
+
+[data-bs-theme="dark"] body,
+body[data-bs-theme="dark"] {
+  background-color: #111827 !important;
+}
+
+[data-bs-theme="dark"] .card {
+  background-color: #1f2937;
+}
+
+[data-bs-theme="dark"] .list-group-item {
+  background-color: transparent;
+}
+
+[data-bs-theme="dark"] .chore-table tbody tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+[data-bs-theme="dark"] .chore-table tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.09);
+}
+
+[data-bs-theme="dark"] .chore-table thead th {
+  color: #9ca3af;
+  border-bottom-color: #374151;
+}
+
+[data-bs-theme="dark"] .chore-table thead .today-dot {
+  background: #60a5fa;
+}
+
+[data-bs-theme="dark"] .chore-table thead th.today-col {
+  color: #60a5fa;
+}
+
+[data-bs-theme="dark"] .chore-cell .cell-btn {
+  border-color: #4b5563;
+  background: #111827;
+}
+
+[data-bs-theme="dark"] .chore-cell .cell-btn:hover {
+  border-color: #60a5fa;
+  background: #1e3a5f;
+}
+
+[data-bs-theme="dark"] .chore-cell .cell-btn.week-off {
+  background: transparent;
+}
+
+[data-bs-theme="dark"] .pick-kid-btn {
+  border-color: #4b5563;
+  background: #111827;
+}
+
+[data-bs-theme="dark"] .pick-kid-btn:hover {
+  border-color: var(--kid-color);
+  background: color-mix(in srgb, var(--kid-color) 18%, #111827);
+}
+
+[data-bs-theme="dark"] .chore-pts {
+  background: #423818;
+  color: #facc15;
+}
+
+[data-bs-theme="dark"] .freq-badge {
+  filter: saturate(0.85);
+}
+
+[data-bs-theme="dark"] .progress {
+  background-color: #374151;
+}
+
+[data-bs-theme="dark"] .today-chore {
+  border-bottom-color: #374151;
+}
+
+[data-bs-theme="dark"] .badge.text-bg-light {
+  background-color: #374151 !important;
+  color: #e5e7eb !important;
+}
+
+[data-bs-theme="dark"] .text-muted {
+  color: #9ca3af !important;
+}
+
+[data-bs-theme="dark"] .form-control-color {
+  width: 52px;
+  min-height: 34px;
+}
+
+[data-bs-theme="dark"] footer {
+  color: #6b7280;
+}

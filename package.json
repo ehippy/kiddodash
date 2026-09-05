@@ -1,0 +1,12 @@
+{
+  "name": "kiddodash",
+  "version": "1.0.0",
+  "description": "A household chore chart app for kids and families",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

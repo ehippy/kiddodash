@@ -1,0 +1,36 @@
+name: kiddodash
+
+services:
+  app:
+    build: .
+    container_name: kiddodash
+    ports:
+      - "8321:3000"
+    volumes:
+      - kiddodash_data:/data
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/data
+    restart: unless-stopped
+
+  # Development: hot reload for code changes.
+  # Usage:   docker compose --profile dev up -d --build
+  # Teardown: docker compose --profile dev down && docker compose up -d
+  app-dev:
+    build: .
+    container_name: kiddodash-dev
+    profiles: ["dev"]
+    ports:
+      - "8322:3000"
+    volumes:
+      - ./server.js:/app/server.js:ro
+      - ./public:/app/public:ro
+      - kiddodash_data:/data
+    environment:
+      - NODE_ENV=development
+      - DATA_DIR=/data
+    command: ["node", "--watch", "server.js"]
+    restart: "no"
+
+volumes:
+  kiddodash_data:
