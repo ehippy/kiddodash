@@ -129,8 +129,8 @@ function loadWeek() {
                 : 'Check off';
             parts.push(`<button class="cell-btn" data-chore="${chore.id}" data-date="${ds}" title="${hint}">✎</button>`);
           }
-          if (!due && !doneKids.length) return `<td class="chore-cell"><div class="cell-btn week-off"></div></td>`;
-          if (!parts.length) return `<td class="chore-cell"><div class="cell-btn week-off"></div></td>`;
+          if (!due && !doneKids.length) return `<td class="chore-cell"></td>`;
+          if (!parts.length) return `<td class="chore-cell"></td>`;
           return `<td class="chore-cell text-center"><div class="d-flex flex-column gap-1">${parts.join('')}</div></td>`;
         })
         .join('');
