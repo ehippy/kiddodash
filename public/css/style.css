@@ -155,26 +155,40 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   50% { transform: translateY(-4px); }
 }
 
-/* Today tab cards */
-.today-card {
-  border-left: 6px solid var(--kid-color, #0d6efd);
-}
-
-.today-chore {
-  display: flex;
+/* Today summary chips above the chart */
+.today-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.45rem 0;
-  border-bottom: 1px dashed #e9ecef;
+  gap: 8px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  border: 2px solid var(--kid-color, #dee2e6);
+  background: color-mix(in srgb, var(--kid-color, #adb5bd) 9%, #fff);
+  color: var(--bs-body-color);
 }
 
-.today-chore:last-child {
-  border-bottom: none;
+.today-chip .today-dot-kid {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--kid-color, #0d6efd);
 }
 
-.today-chore .done-stamp {
-  margin-left: auto;
-  font-size: 1.2rem;
+.today-chip .today-chip-count {
+  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--kid-color, #adb5bd) 16%, #fff);
+  padding: 1px 9px;
+  border-radius: 999px;
+}
+
+.today-chip.done {
+  background: color-mix(in srgb, var(--kid-color, #adb5bd) 22%, #fff);
+}
+
+.today-chip.done .bi {
+  font-size: 0.9rem;
 }
 
 /* Pick-kid buttons in modal */
@@ -300,8 +314,17 @@ body[data-bs-theme="dark"] {
   background-color: #374151;
 }
 
-[data-bs-theme="dark"] .today-chore {
-  border-bottom-color: #374151;
+[data-bs-theme="dark"] .today-chip {
+  background: color-mix(in srgb, var(--kid-color, #4b5563) 14%, #1f2937);
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .today-chip .today-chip-count {
+  background: color-mix(in srgb, var(--kid-color, #4b5563) 28%, #1f2937);
+}
+
+[data-bs-theme="dark"] .today-chip.done {
+  background: color-mix(in srgb, var(--kid-color, #4b5563) 26%, #1f2937);
 }
 
 [data-bs-theme="dark"] .badge.text-bg-light {

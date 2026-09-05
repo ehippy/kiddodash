@@ -7,7 +7,6 @@ const state = {
   chores: [],
   settings: null,
   weekOffset: 0, // 0 = current week
-  todayCompletions: [],
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -156,6 +155,7 @@ async function refreshWeek() {
   state.weekGrid = data.grid;
   state.weekDates = data.week.map((w) => w.date);
   renderLegend();
+  renderTodaySummary();
   loadWeek();
   loadKidsTab();
   loadChoresTab();
@@ -202,79 +202,41 @@ async function openCellPicker(choreId, date) {
 // Context for the cell being picked (chore + date)
 let pickCtx = null;
 
-/* ============================ Today tab ============================ */
+/* ============================ Today summary (chart) ============================ */
 
-function loadTodayTab() {
-  const today = dateStr(new Date());
-  $('#todayLabel').textContent = `Today · ${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}`;
-  const doneByChore = new Map(state.todayCompletions.map((c) => [c.choreId, c]));
-
-  if (!state.chores.length) {
-    $('#todayContent').innerHTML =
-      '<div class="empty-state card"><i class="bi bi-clipboard2-x"></i>No chores yet — add some in the “Chores” tab.</div>';
+// Per-kid "today" progress: which chores are due for this kid today, and which
+// are already done. Reads the same week grid as the chart, so it can't go stale
+// relative to it (and unlike the old Today tab, personal chores count).
+function renderTodaySummary() {
+  const el = $('#todaySummary');
+  if (!el) return;
+  if (!state.kids.length || !state.chores.length) {
+    el.innerHTML = '';
     return;
   }
-
+  const today = dateStr(new Date());
+  const dow = new Date().getDay();
+  const grid = state.weekGrid || {};
   const due = state.chores.filter(
-    (c) => c.frequency === 'daily' || (c.frequency === 'weekly' && c.dayOfWeek === new Date().getDay())
+    (c) =>
+      c.active !== false &&
+      (c.frequency === 'daily' || c.frequency === 'personal' || (c.frequency === 'weekly' && c.dayOfWeek === dow))
   );
   if (!due.length) {
-    $('#todayContent').innerHTML =
-      '<div class="empty-state card"><i class="bi bi-sun"></i>Nothing due today. Enjoy the free day! 🎉</div>';
+    el.innerHTML = '<span class="today-chip" style="--kid-color:#6b7280">🎉 Nothing due today — enjoy the free day!</span>';
     return;
   }
-
-  $('#todayContent').innerHTML = state.kids.length
-    ? state.kids
-        .map((k) => {
-          const rows = due
-            .map((chore) => {
-              const done = doneByChore.get(chore.id);
-              const doneByKid = done && done.kidId === k.id;
-              const doneByOther = done && !doneByKid && chore.frequency !== 'personal';
-              const isPersonal = chore.frequency === 'personal';
-              return `<div class="today-chore ${doneByOther ? 'text-muted' : ''}">
-                ${
-                  doneByKid || doneByOther
-                    ? '<span class="done-stamp" title="Done"><i class="bi bi-check-circle-fill text-success"></i></span>'
-                    : '<span class="badge text-bg-light">to do</span>'
-                }
-                <span class="fw-bold">${esc(chore.title)}</span>
-                <span class="chore-pts">${chore.points} pt${chore.points > 1 ? 's' : ''}</span>
-                ${
-                  doneByKid && isPersonal
-                    ? `<span class="badge text-bg-light ms-auto">+${chore.points} pts</span>`
-                    : doneByOther
-                      ? `<span class="badge text-bg-light ms-auto">${esc(done.kidEmoji)} by ${esc(done.kidName)}</span>`
-                      : ''
-                }
-              </div>`;
-            })
-            .join('');
-          const doneCount = due.filter((c) => {
-            const d = doneByChore.get(c.id);
-            return d && d.kidId === k.id;
-          }).length;
-          return `<div class="card shadow-sm today-card" style="--kid-color:${esc(k.color)}">
-            <div class="card-body d-flex align-items-center gap-3">
-              <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
-              <div class="flex-grow-1">
-                <div class="d-flex justify-content-between">
-                  <span class="fw-bold">${esc(k.name)}</span>
-                  <span class="text-muted small">${doneCount}/${due.length} done</span>
-                </div>
-                ${rows}
-              </div>
-            </div>
-          </div>`;
-        })
-        .join('')
-    : '<div class="empty-state card"><i class="bi bi-people"></i>Add a kid in the “Kids” tab to see today’s list.</div>';
-}
-
-async function refreshToday() {
-  state.todayCompletions = await api('/api/completions');
-  loadTodayTab();
+  el.innerHTML = state.kids
+    .map((k) => {
+      const done = due.filter((c) => (grid[c.id] || {})[today]?.[k.id]).length;
+      const allDone = done === due.length;
+      return `<span class="today-chip ${allDone ? 'done' : ''}" style="--kid-color:${esc(k.color)}">
+        <span class="today-dot-kid"></span>${esc(k.emoji)} ${esc(k.name)}
+        <span class="today-chip-count">${done}/${due.length}</span>
+        ${allDone ? '<i class="bi bi-check-lg"></i>' : ''}
+      </span>`;
+    })
+    .join('');
 }
 
 /* ============================ Kids tab ============================ */
@@ -395,7 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (ok) {
         await api('/api/completions/' + undo.dataset.undo, { method: 'DELETE' });
         toast('Undone');
-        await Promise.all([refreshWeek(), refreshToday()]);
+        await Promise.all([refreshWeek()]);
       }
       return;
     }
@@ -415,7 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const kid = state.kids.find((k) => k.id === done.kidId);
       toast(`${kid?.emoji || '🎉'} ${kid?.name || 'Someone'} got ${done.points} point${done.points > 1 ? 's' : ''}!`);
-      await Promise.all([refreshWeek(), refreshToday(), loadKidsTab()]);
+      await Promise.all([refreshWeek(), loadKidsTab()]);
     } catch (err) {
       toast(err.message, 'danger');
     }
@@ -435,7 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       toast(`${kid.emoji} ${kid.name} added!`);
       $('#kidName').value = '';
-      await Promise.all([refreshWeek(), refreshToday()]);
+      await Promise.all([refreshWeek()]);
     } catch (err) {
       toast(err.message, 'danger');
     }
@@ -451,7 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           await api('/api/kids/' + del.dataset.delkid, { method: 'DELETE' });
           toast('Removed', 'secondary');
-          await Promise.all([refreshWeek(), refreshToday()]);
+          await Promise.all([refreshWeek()]);
         } catch (err) { toast(err.message, 'danger'); }
       }
       return;
@@ -507,7 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       toast('Chore added');
       $('#choreTitle').value = '';
-      await Promise.all([refreshWeek(), refreshToday()]);
+      await Promise.all([refreshWeek()]);
     } catch (err) { toast(err.message, 'danger'); }
   });
 
@@ -521,7 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           await api('/api/chores/' + del.dataset.delchore, { method: 'DELETE' });
           toast('Chore deleted', 'secondary');
-          await Promise.all([refreshWeek(), refreshToday()]);
+          await Promise.all([refreshWeek()]);
         } catch (err) { toast(err.message, 'danger'); }
       }
     }
@@ -532,7 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (day) {
       try {
         await api('/api/chores/' + day.dataset.changeday, { method: 'PUT', body: { dayOfWeek: Number(day.value) } });
-        await Promise.all([refreshWeek(), refreshToday()]);
+        await Promise.all([refreshWeek()]);
       } catch (err) { toast(err.message, 'danger'); }
       return;
     }
@@ -540,7 +502,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (toggle) {
       try {
         await api('/api/chores/' + toggle.dataset.togglechores, { method: 'PUT', body: { active: toggle.checked } });
-        await Promise.all([refreshWeek(), refreshToday()]);
+        await Promise.all([refreshWeek()]);
       } catch (err) { toast(err.message, 'danger'); }
     }
   });
@@ -611,7 +573,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Tab switching refresh
   const tabActions = {
-    'pane-today': () => refreshToday(),
     'pane-chart': () => refreshWeek(),
     'pane-kids': () => refreshWeek(),
     'pane-chores': () => refreshWeek(),
@@ -625,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Initial load
-  Promise.all([api('/api/settings'), refreshWeek(), refreshToday()])
+  Promise.all([api('/api/settings'), refreshWeek()])
     .then(([settings]) => {
       state.settings = settings;
       loadRewardsTab();

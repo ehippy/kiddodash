@@ -36,7 +36,6 @@
 <main class="container py-4">
   <ul class="nav nav-pills mb-4 gap-2" role="tablist">
     <li class="nav-item"><button class="nav-link active" id="tab-chart" data-bs-toggle="pill" data-bs-target="#pane-chart" type="button" role="tab" aria-controls="pane-chart"><i class="bi bi-calendar-week me-1"></i>Chart</button></li>
-    <li class="nav-item"><button class="nav-link" id="tab-today" data-bs-toggle="pill" data-bs-target="#pane-today" type="button" role="tab" aria-controls="pane-today"><i class="bi bi-check2-circle me-1"></i>Today</button></li>
     <li class="nav-item"><button class="nav-link" id="tab-kids" data-bs-toggle="pill" data-bs-target="#pane-kids" type="button" role="tab" aria-controls="pane-kids"><i class="bi bi-people me-1"></i>Kids</button></li>
     <li class="nav-item"><button class="nav-link" id="tab-chores" data-bs-toggle="pill" data-bs-target="#pane-chores" type="button" role="tab" aria-controls="pane-chores"><i class="bi bi-list-check me-1"></i>Chores</button></li>
     <li class="nav-item"><button class="nav-link" id="tab-rewards" data-bs-toggle="pill" data-bs-target="#pane-rewards" type="button" role="tab" aria-controls="pane-rewards"><i class="bi bi-trophy me-1"></i>Rewards</button></li>
@@ -57,6 +56,8 @@
 
     <div id="legend" class="d-flex flex-wrap gap-2 mb-3"></div>
 
+    <div id="todaySummary" class="d-flex flex-wrap gap-2 mb-3"></div>
+
     <div class="card shadow-sm">
       <div class="table-responsive">
         <table class="table table-borderless align-middle mb-0 chore-table">
@@ -69,12 +70,6 @@
       <i class="bi bi-info-circle me-1"></i>Click a highlighted cell to check off a chore. Click a chip to undo.
       Daily chores are due every day for each kid; weekly chores are due on their day.
     </p>
-  </div>
-
-  <!-- ============ TODAY TAB ============ -->
-  <div class="tab-pane fade" id="pane-today" role="tabpanel" aria-labelledby="tab-today">
-    <h5 id="todayLabel">Today</h5>
-    <div id="todayContent" class="vstack gap-3"></div>
   </div>
 
   <!-- ============ KIDS TAB ============ -->
