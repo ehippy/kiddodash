@@ -54,6 +54,23 @@ test('legacy completions table is rebuilt, keeps every row, and still rejects du
   assert.equal(scalarDb(dataDir, 'SELECT COUNT(*) FROM redemptions WHERE kid_id = 1'), 0);
 });
 
+test('migrations do not run twice', async () => {
+  const dataDir = createLegacyDb();
+  const first = await bootServer({ dataDir });
+  try {
+    assert.match(first.logsJoined(), /migrated: completions now unique per kid/);
+  } finally {
+    await first.stop();
+  }
+
+  const second = await bootServer({ dataDir });
+  try {
+    assert.doesNotMatch(second.logsJoined(), /migrated:/, 'second boot should not re-run migrations');
+  } finally {
+    await second.stop();
+  }
+});
+
 test('rebuilding chores leaves completions pointing at chores, not chores_old', async (t) => {
   // Renaming a parent table makes SQLite rewrite the FK clause of *other* tables to the
   // new name; that breaks inserts and cascades the moment FKs are enforced.
