@@ -17,6 +17,13 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'kiddodash.db'));
 
+// SQLite defaults `foreign_keys` to OFF, so the ON DELETE CASCADE clauses in the
+// schema below do nothing until we ask for them. Turn enforcement on once, right
+// after opening the connection: this is a single shared connection for the whole
+// process, so it stays on for the process lifetime. Deleting a kid or a chore now
+// removes the dependent completions/redemptions instead of orphaning them.
+db.exec('PRAGMA foreign_keys = ON;');
+
 db.exec(`
   PRAGMA journal_mode = WAL;
 
@@ -73,7 +80,14 @@ function tableSql(name) {
 function migrate() {
   const choresSql = tableSql('chores');
   if (choresSql && !/CHECK \(frequency IN \('daily', 'weekly', 'personal'\)\)/.test(choresSql)) {
+    // Rebuilding a table needs FKs off. Both pragmas are no-ops inside a transaction,
+    // so they sit outside the statements below and are restored afterwards to match the
+    // startup state (foreign_keys ON). legacy_alter_table keeps `completions` pointing at
+    // `chores`: by default SQLite rewrites the FK clause of *other* tables to
+    // `chores_old` when a parent is renamed, which breaks inserts/cascades once FKs are enforced.
     db.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = ON;
       ALTER TABLE chores RENAME TO chores_old;
       CREATE TABLE chores (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,6 +101,8 @@ function migrate() {
       INSERT INTO chores (id, title, points, frequency, day_of_week, active)
         SELECT id, title, points, frequency, day_of_week, active FROM chores_old;
       DROP TABLE chores_old;
+      PRAGMA legacy_alter_table = OFF;
+      PRAGMA foreign_keys = ON;
     `);
     console.log('migrated: chores now supports personal frequency');
   }
@@ -112,6 +128,31 @@ function migrate() {
       CREATE INDEX IF NOT EXISTS idx_completions_date ON completions(done_date);
     `);
     console.log('migrated: completions now unique per kid');
+  }
+
+  cleanUpOrphans();
+}
+
+// Completions/redemptions written while `foreign_keys` was left at SQLite's default
+// (OFF) can outlive their kid or chore. Remove those rows: they inflate /api/totals
+// (and therefore /api/redeem balances) with points nobody can ever spend.
+// Idempotent -- on a healthy database it deletes nothing and stays quiet.
+function cleanUpOrphans() {
+  const completions = db
+    .prepare(
+      `DELETE FROM completions
+        WHERE kid_id NOT IN (SELECT id FROM kids)
+           OR chore_id NOT IN (SELECT id FROM chores)`
+    )
+    .run();
+  const redemptions = db
+    .prepare('DELETE FROM redemptions WHERE kid_id NOT IN (SELECT id FROM kids)')
+    .run();
+
+  if (completions.changes > 0 || redemptions.changes > 0) {
+    console.log(
+      `migrated: removed ${completions.changes} orphaned completion(s), ${redemptions.changes} orphaned redemption(s)`
+    );
   }
 }
 
@@ -177,6 +218,24 @@ function sendError(res, status, message) {
   res.status(status).json({ error: message });
 }
 
+// Run `fn` inside a transaction so a parent row and the children it cascades to all
+// go, or none do. Returns whatever fn() returns; rethrows after ROLLBACK on failure.
+function inTransaction(fn) {
+  db.exec('BEGIN');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* the transaction was already unwound */
+    }
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -233,9 +292,15 @@ app.put('/api/kids/:id', (req, res) => {
 });
 
 app.delete('/api/kids/:id', (req, res) => {
-  const info = prepare('DELETE FROM kids WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) return sendError(res, 404, 'Kid not found');
-  res.json({ ok: true });
+  try {
+    // FKs are enforced, so this kid's completions and redemptions cascade away in the
+    // same transaction as the kid row itself.
+    const info = inTransaction(() => prepare('DELETE FROM kids WHERE id = ?').run(req.params.id));
+    if (info.changes === 0) return sendError(res, 404, 'Kid not found');
+    res.json({ ok: true });
+  } catch (e) {
+    sendError(res, 500, e.message);
+  }
 });
 
 // --- Chores --------------------------------------------------------------------
@@ -298,9 +363,14 @@ app.put('/api/chores/:id', (req, res) => {
 });
 
 app.delete('/api/chores/:id', (req, res) => {
-  const info = prepare('DELETE FROM chores WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) return sendError(res, 404, 'Chore not found');
-  res.json({ ok: true });
+  try {
+    // FKs are enforced, so this chore's completions cascade away with it.
+    const info = inTransaction(() => prepare('DELETE FROM chores WHERE id = ?').run(req.params.id));
+    if (info.changes === 0) return sendError(res, 404, 'Chore not found');
+    res.json({ ok: true });
+  } catch (e) {
+    sendError(res, 500, e.message);
+  }
 });
 
 // --- Completions ----------------------------------------------------------------
