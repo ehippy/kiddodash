@@ -64,3 +64,15 @@ docker compose up -d --build app
 | `POST /api/redeem`        | Spend a kid's points on a reward (400 if balance too low) |
 | `GET /api/redeemptions`   | Recent reward redemptions                    |
 | `GET/PUT /api/settings`   | Points, rewards                              |
+
+## Testing
+
+```sh
+npm test
+```
+
+Boots the real server against a throwaway `DATA_DIR` and asserts over HTTP plus a
+second SQLite connection: cascade deletes, the startup cleanup of rows orphaned
+by the old FK-less behaviour, and the legacy schema migrations. Needs
+**Node.js 22+** — the app uses the built-in `node:sqlite` module. `test/run.js`
+locates an interpreter that has it; set `KIDDOSH_NODE` if it is not reachable.

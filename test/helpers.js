@@ -126,7 +126,8 @@ function createLegacyDb({ completions = 'legacy' } = {}) {
       frequency TEXT NOT NULL DEFAULT 'weekly' CHECK (frequency IN ('daily', 'weekly')),
       day_of_week INTEGER, active INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE redemptions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, kid_id INTEGER NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kid_id INTEGER NOT NULL REFERENCES kids(id) ON DELETE CASCADE,
       reward_label TEXT NOT NULL, points INTEGER NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')));
   `);

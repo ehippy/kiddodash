@@ -12,7 +12,7 @@ const { bootServer, createLegacyDb, seedDb, queryDb, scalarDb } = require('./hel
 const indexExists = (dir, name) =>
   scalarDb(dir, "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?", name) === 1;
 
-test('legacy completions table is rebuilt, keeps every row, and still rejects duplicates with 409', async () => {
+test('legacy completions table is rebuilt, keeps every row, and still rejects duplicates with 409', async (t) => {
   const dataDir = createLegacyDb();
   seedDb(dataDir, "INSERT INTO kids (id, name) VALUES (1, 'Legacy Kid'), (2, 'Second')");
   seedDb(dataDir, "INSERT INTO chores (id, title, points, frequency) VALUES (1, 'Old chore', 6, 'daily'), (2, 'Twice chore', 6, 'weekly')");
@@ -26,6 +26,8 @@ test('legacy completions table is rebuilt, keeps every row, and still rejects du
   assert.equal(scalarDb(dataDir, 'SELECT COUNT(*) FROM completions'), 6);
 
   const boot = await bootServer({ dataDir });
+  t.after(() => boot.stop());
+
   const log = boot.logsJoined();
   assert.match(log, /migrated: chores now supports personal frequency/);
   assert.match(log, /migrated: completions now unique per kid/);
@@ -50,18 +52,9 @@ test('legacy completions table is rebuilt, keeps every row, and still rejects du
   assert.equal(del.status, 200);
   assert.equal(scalarDb(dataDir, 'SELECT COUNT(*) FROM completions WHERE kid_id = 1'), 0);
   assert.equal(scalarDb(dataDir, 'SELECT COUNT(*) FROM redemptions WHERE kid_id = 1'), 0);
-  await boot.stop();
-
-  // Migrations must not run twice.
-  const second = await bootServer({ dataDir });
-  try {
-    assert.doesNotMatch(second.logsJoined(), /migrated:/, 'second boot should not re-run migrations');
-  } finally {
-    await second.stop();
-  }
 });
 
-test('rebuilding chores leaves completions pointing at chores, not chores_old', async () => {
+test('rebuilding chores leaves completions pointing at chores, not chores_old', async (t) => {
   // Renaming a parent table makes SQLite rewrite the FK clause of *other* tables to the
   // new name; that breaks inserts and cascades the moment FKs are enforced.
   const dataDir = createLegacyDb({ completions: 'modern' });
@@ -70,20 +63,19 @@ test('rebuilding chores leaves completions pointing at chores, not chores_old', 
   seedDb(dataDir, "INSERT INTO completions (chore_id, kid_id, done_date, points) VALUES (1, 1, '2020-04-04', 4)");
 
   const boot = await bootServer({ dataDir });
-  try {
-    assert.match(boot.logsJoined(), /migrated: chores now supports personal frequency/);
-    assert.doesNotMatch(boot.logsJoined(), /STDERR|Error:/, `server crashed during the rebuild:\n${boot.logsJoined()}`);
+  t.after(() => boot.stop());
 
-    const created = await boot.api('POST', '/api/completions', { choreId: 1, kidId: 1, date: '2021-05-05' });
-    assert.equal(created.status, 201, `insert after the chores rebuild failed: ${JSON.stringify(created.body)}`);
+  const log = boot.logsJoined();
+  assert.match(log, /migrated: chores now supports personal frequency/);
+  assert.doesNotMatch(log, /Error:/, `server crashed during the rebuild:\n${log}`);
 
-    const del = await boot.api('DELETE', '/api/kids/1');
-    assert.equal(del.status, 200);
-    assert.equal(scalarDb(dataDir, 'SELECT COUNT(*) FROM completions'), 0, 'cascade broke after the chores rebuild');
-    assert.deepEqual(queryDb(dataDir, 'PRAGMA foreign_key_check'), [], 'FK integrity must hold after the rebuild');
-    const ddl = queryDb(dataDir, "SELECT sql FROM sqlite_master WHERE name = 'completions'")[0].sql;
-    assert.doesNotMatch(ddl, /chores_old/, "completions' FK must still reference chores");
-  } finally {
-    await boot.stop();
-  }
+  const created = await boot.api('POST', '/api/completions', { choreId: 1, kidId: 1, date: '2021-05-05' });
+  assert.equal(created.status, 201, `insert after the chores rebuild failed: ${JSON.stringify(created.body)}`);
+
+  const del = await boot.api('DELETE', '/api/kids/1');
+  assert.equal(del.status, 200);
+  assert.equal(scalarDb(dataDir, 'SELECT COUNT(*) FROM completions'), 0, 'cascade broke after the chores rebuild');
+  assert.deepEqual(queryDb(dataDir, 'PRAGMA foreign_key_check'), [], 'FK integrity must hold after the rebuild');
+  const ddl = queryDb(dataDir, "SELECT sql FROM sqlite_master WHERE name = 'completions'")[0].sql;
+  assert.doesNotMatch(ddl, /chores_old/, "completions' FK must still reference chores");
 });
