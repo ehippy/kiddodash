@@ -11,6 +11,13 @@ services:
     environment:
       - NODE_ENV=production
       - DATA_DIR=/data
+      # One-time PIN bootstrap: `ADMIN_PIN=... KID_PIN_1=... docker compose up -d`
+      # seeds the PINs into the DB/settings on first boot; afterwards these can
+      # stay empty (existing PINs are never overwritten from env). PIN changes
+      # happen in the app's Access tab.
+      - ADMIN_PIN=${ADMIN_PIN:-}
+      - KID_PIN_1=${KID_PIN_1:-}
+      - KID_PIN_2=${KID_PIN_2:-}
     restart: unless-stopped
 
   # Development: hot reload for code changes.
