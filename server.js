@@ -314,13 +314,13 @@ function createSession(session) {
 }
 
 function getSession(req) {
-  let token = null;
+  // Bearer header ONLY — deliberately no cookie fallback. A cookie would
+  // persist the session in the browser profile for its whole lifetime, so on a
+  // shared family tablet the next person who opens the site inherits whoever
+  // last signed in (possibly admin, PIN-free). sessionStorage + Bearer dies
+  // with the tab instead, and cross-site fetches still can't forge it.
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.slice(7);
-  if (!token && req.headers.cookie) {
-    const match = /(?:^;\s*)?kd_session=([a-f0-9]+)/.exec(req.headers.cookie);
-    if (match) token = match[1];
-  }
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
   const session = sessions.get(token);
   if (!session) return null;
@@ -360,12 +360,7 @@ function clearLoginFails(ip) {
   loginFails.delete(ip);
 }
 
-function sessionCookie(token) {
-  // HttpOnly so XSS can't read it; the client also keeps its own copy in
-  // sessionStorage and sends it as a Bearer header — cross-site fetches can't
-  // set that header, which blocks CSRF without needing SameSite=None games.
-  return `kd_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
-}
+// (no session cookie anymore — see getSession: Bearer-only by design)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -487,7 +482,6 @@ app.post('/api/auth/login', (req, res) => {
   if (ADMIN_PIN_RE.test(pin) && adminPinMatches(pin)) {
     const token = createSession({ role: 'admin' });
     clearLoginFails(ip);
-    res.setHeader('Set-Cookie', sessionCookie(token));
     return res.json({ role: 'admin', token });
   }
   if (KID_PIN_RE.test(pin)) {
@@ -495,7 +489,6 @@ app.post('/api/auth/login', (req, res) => {
     if (kid) {
       const token = createSession({ role: 'kid', kidId: kid.id });
       clearLoginFails(ip);
-      res.setHeader('Set-Cookie', sessionCookie(token));
       return res.json({ role: 'kid', token, kid: { id: kid.id, name: kid.name, color: kid.color, emoji: kid.emoji } });
     }
   }
@@ -506,7 +499,6 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   const session = getSession(req);
   if (session) dropSession(session.token);
-  res.setHeader('Set-Cookie', 'kd_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
   res.json({ ok: true });
 });
 

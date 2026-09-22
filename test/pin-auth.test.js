@@ -245,23 +245,31 @@ test('login throttles after 10 wrong attempts', async () => {
   await s.stop();
 });
 
-test('session cookie survives without bearer header; logout kills it', async () => {
+test('auth is Bearer-only: no cookie is ever set, so shared devices cannot inherit a session', async () => {
   const s = await bootLocked();
   const res = await fetch(`${s.base}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ pin: '1234' }),
   });
-  const cookie = res.headers.get('set-cookie');
-  assert.match(cookie, /kd_session=[a-f0-9]+/);
-  assert.match(cookie, /HttpOnly/);
+  // A cookie would live in the browser profile and hand the next person on a
+  // shared tablet this session for free. Refuse to mint one.
+  assert.equal(res.headers.get('set-cookie'), null);
 
-  const token = /kd_session=([a-f0-9]+)/.exec(cookie)[1];
-  const who = await fetch(`${s.base}/api/auth/status`, { headers: { cookie: `kd_session=${token}` } });
+  const { token } = await res.json();
+  const who = await fetch(`${s.base}/api/auth/status`, { headers: bearer(token) });
   assert.deepEqual((await who.json()).session, { role: 'admin' });
 
-  await fetch(`${s.base}/api/auth/logout`, { method: 'POST', headers: { cookie: `kd_session=${token}` } });
-  const after = await fetch(`${s.base}/api/auth/status`, { headers: { cookie: `kd_session=${token}` } });
+  // The token alone (no header) buys nothing.
+  const naked = await fetch(`${s.base}/api/chores`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'Sneaky' }),
+  });
+  assert.equal(naked.status, 401);
+
+  await fetch(`${s.base}/api/auth/logout`, { method: 'POST', headers: bearer(token) });
+  const after = await fetch(`${s.base}/api/auth/status`, { headers: bearer(token) });
   assert.equal((await after.json()).session, null);
   await s.stop();
 });
