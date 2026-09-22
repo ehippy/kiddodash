@@ -43,7 +43,7 @@ db.exec(`
     title       TEXT NOT NULL,
     points      INTEGER NOT NULL DEFAULT 1,
     frequency   TEXT NOT NULL DEFAULT 'weekly'
-                CHECK (frequency IN ('daily', 'weekly', 'personal')),
+                CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays')),
     day_of_week INTEGER,
     active      INTEGER NOT NULL DEFAULT 1
   );
@@ -82,7 +82,7 @@ function tableSql(name) {
 
 function migrate() {
   const choresSql = tableSql('chores');
-  if (choresSql && !/CHECK \(frequency IN \('daily', 'weekly', 'personal'\)\)/.test(choresSql)) {
+  if (choresSql && !/CHECK \(frequency IN \('daily', 'weekly', 'personal', 'schooldays'\)\)/.test(choresSql)) {
     // Rebuilding a table needs FKs off. Both pragmas are no-ops inside a transaction,
     // so they sit outside the statements below and are restored afterwards to match the
     // startup state (foreign_keys ON). legacy_alter_table keeps `completions` pointing at
@@ -97,7 +97,7 @@ function migrate() {
         title       TEXT NOT NULL,
         points      INTEGER NOT NULL DEFAULT 1,
         frequency   TEXT NOT NULL DEFAULT 'weekly'
-                    CHECK (frequency IN ('daily', 'weekly', 'personal')),
+                    CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays')),
         day_of_week INTEGER,
         active      INTEGER NOT NULL DEFAULT 1
       );
@@ -621,7 +621,7 @@ app.get('/api/chores', (req, res) => {
 app.post('/api/chores', requireAdmin, (req, res) => {
   const { title, points, frequency, dayOfWeek } = req.body || {};
   if (!title || !String(title).trim()) return sendError(res, 400, 'Title is required');
-  const freq = ['daily', 'weekly', 'personal'].includes(frequency) ? frequency : 'weekly';
+  const freq = ['daily', 'weekly', 'personal', 'schooldays'].includes(frequency) ? frequency : 'weekly';
   let dow = dayOfWeek == null ? null : Number(dayOfWeek);
   if (dow < 0 || dow > 6) dow = null;
   const pts = Number.isInteger(points) && points > 0 ? points : 1;
@@ -645,7 +645,7 @@ app.put('/api/chores/:id', requireAdmin, (req, res) => {
       ? req.body.points
       : chore.points;
   const frequency =
-    req.body.frequency === 'daily' || req.body.frequency === 'weekly' || req.body.frequency === 'personal'
+    ['daily', 'weekly', 'personal', 'schooldays'].includes(req.body.frequency)
       ? req.body.frequency
       : chore.frequency;
   let dow =

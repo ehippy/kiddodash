@@ -192,6 +192,7 @@ function loadWeek() {
           const ds = dateStr(d);
           const isDue =
             chore.frequency === 'daily' ||
+            (chore.frequency === 'schooldays' && d.getDay() >= 1 && d.getDay() <= 5) ||
             (chore.frequency === 'personal' &&
               (chore.dayOfWeek == null || chore.dayOfWeek === d.getDay())) ||
             (chore.frequency === 'weekly' && chore.dayOfWeek === d.getDay());
@@ -225,7 +226,9 @@ function loadWeek() {
       const freqBadge =
         chore.frequency === 'daily'
           ? '<span class="badge text-bg-info freq-badge">daily</span>'
-          : chore.frequency === 'personal'
+          : chore.frequency === 'schooldays'
+            ? '<span class="badge text-bg-info freq-badge">school nights</span>'
+            : chore.frequency === 'personal'
             ? `<span class="badge text-bg-primary freq-badge">each kid, ${chore.dayOfWeek == null ? 'daily' : DAYS_FULL[chore.dayOfWeek]}</span>`
             : `<span class="badge text-bg-secondary freq-badge">${DAYS_FULL[chore.dayOfWeek]}</span>`;
       return `<tr>
@@ -304,6 +307,7 @@ function renderTodaySummary() {
     (c) =>
       c.active !== false &&
       (c.frequency === 'daily' ||
+        (c.frequency === 'schooldays' && dow >= 1 && dow <= 5) ||
         (c.frequency === 'personal' && (c.dayOfWeek == null || c.dayOfWeek === dow)) ||
         (c.frequency === 'weekly' && c.dayOfWeek === dow))
   );
@@ -414,9 +418,11 @@ function loadChoresTab() {
                     .map((d) => `<option value="${d}" ${c.dayOfWeek === d ? 'selected' : ''}>${DAYS_FULL[d]}</option>`)
                     .join('')}
                 </select>`
-              : c.frequency === 'daily'
-                ? '<span class="badge text-bg-info freq-badge">daily</span>'
-                : `<span class="badge text-bg-primary freq-badge">each kid${c.dayOfWeek == null ? ', daily' : ''}</span>
+              : c.frequency === 'schooldays'
+                ? '<span class="badge text-bg-info freq-badge">each kid, school nights</span>'
+                : c.frequency === 'daily'
+                  ? '<span class="badge text-bg-info freq-badge">daily</span>'
+                  : `<span class="badge text-bg-primary freq-badge">each kid${c.dayOfWeek == null ? ', daily' : ''}</span>
                   <select class="form-select form-select-sm day-select" data-changeday="${c.id}">
                   ${['', 1, 2, 3, 4, 5, 6, 0]
                     .map((d) => `<option value="${d}" ${String(c.dayOfWeek ?? '') === String(d) ? 'selected' : ''}>${d === '' ? 'Every day' : DAYS_FULL[d]}</option>`)
@@ -642,7 +648,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Chores form
   $('#choreFreq').addEventListener('change', (e) => {
-    $('#choreDay').disabled = e.target.value === 'daily';
+    // daily: no day. schooldays: fixed Mon-Fri. weekly/personal: day picker applies.
+    $('#choreDay').disabled = e.target.value === 'daily' || e.target.value === 'schooldays';
   });
   $('#choreForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -652,7 +659,12 @@ document.addEventListener('DOMContentLoaded', () => {
         body: {
           title: $('#choreTitle').value.trim(),
           frequency: $('#choreFreq').value,
-          dayOfWeek: $('#choreFreq').value === 'daily' ? null : ($('#choreDay').value === '' ? null : Number($('#choreDay').value)),
+          dayOfWeek:
+            $('#choreFreq').value === 'daily' || $('#choreFreq').value === 'schooldays'
+              ? null
+              : $('#choreDay').value === ''
+                ? null
+                : Number($('#choreDay').value),
           points: Number($('#chorePoints').value) || 1,
         },
       });
