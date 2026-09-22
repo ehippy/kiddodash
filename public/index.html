@@ -25,11 +25,15 @@
       <i class="bi bi-clipboard2-check me-2"></i>KiddoDash
     </span>
     <span class="navbar-text d-none d-md-inline me-3">The household chore chart</span>
-    <button class="btn btn-outline-light btn-sm" id="themeToggle" title="Toggle light/dark mode" aria-label="Toggle dark mode">
-      <i class="bi bi-moon-fill theme-icon-dark d-none"></i>
-      <i class="bi bi-sun-fill theme-icon-light"></i>
-      <span class="d-none d-sm-inline ms-1">Theme</span>
-    </button>
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge text-bg-light d-none" id="whoBadge"></span>
+      <button class="btn btn-outline-light btn-sm d-none" id="btnSignOut" title="Sign out"><i class="bi bi-box-arrow-right"></i></button>
+      <button class="btn btn-outline-light btn-sm" id="themeToggle" title="Toggle light/dark mode" aria-label="Toggle dark mode">
+        <i class="bi bi-moon-fill theme-icon-dark d-none"></i>
+        <i class="bi bi-sun-fill theme-icon-light"></i>
+        <span class="d-none d-sm-inline ms-1">Theme</span>
+      </button>
+    </div>
   </div>
 </nav>
 
@@ -74,6 +78,7 @@
     <ul class="nav nav-pills mb-3 gap-2 settings-subtabs" role="tablist">
       <li class="nav-item"><button class="nav-link active" id="tab-sub-kids" data-bs-toggle="pill" data-bs-target="#pane-kids" type="button" role="tab" aria-controls="pane-kids"><i class="bi bi-people me-1"></i>Kids</button></li>
       <li class="nav-item"><button class="nav-link" id="tab-sub-chores" data-bs-toggle="pill" data-bs-target="#pane-chores" type="button" role="tab" aria-controls="pane-chores"><i class="bi bi-list-check me-1"></i>Chores</button></li>
+      <li class="nav-item d-none" data-admin-only><button class="nav-link" id="tab-sub-access" data-bs-toggle="pill" data-bs-target="#pane-access" type="button" role="tab" aria-controls="pane-access"><i class="bi bi-shield-lock me-1"></i>Access</button></li>
     </ul>
     <div class="tab-content settings-subpanes">
   <!-- ============ KIDS TAB ============ -->
@@ -90,6 +95,11 @@
                 <span class="input-group-text">Name</span>
                 <input class="form-control" id="kidName" placeholder="Alex" required>
                 <input type="color" class="form-control form-control-color" id="kidColor" value="#7c3aed" title="Pick a color">
+              </div>
+              <div class="input-group input-group-sm">
+                <span class="input-group-text"><i class="bi bi-key"></i></span>
+                <input type="password" inputmode="numeric" maxlength="4" class="form-control"
+                       id="kidPin" placeholder="4-digit PIN (optional)">
               </div>
               <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-plus-lg me-1"></i>Add kid</button>
             </form>
@@ -144,6 +154,31 @@
         <div class="card shadow-sm">
           <div class="card-header"><i class="bi bi-list-check me-1"></i>Chores</div>
           <ul class="list-group list-group-flush" id="choresList"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ACCESS TAB (PINs) ============ -->
+  <div class="tab-pane fade" id="pane-access" role="tabpanel" aria-labelledby="tab-sub-access">
+    <div class="row g-4">
+      <div class="col-lg-6" id="accessAdminCard">
+        <div class="card shadow-sm">
+          <div class="card-header"><i class="bi bi-shield-lock me-1"></i>Admin PIN</div>
+          <div class="card-body">
+            <form id="adminPinForm" class="d-flex gap-2">
+              <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
+                     id="adminPinInput" placeholder="New admin PIN (4-8 digits)" style="max-width:240px">
+              <button class="btn btn-primary btn-sm" type="submit">Save</button>
+            </form>
+            <p class="text-muted small mt-2 mb-0">The admin PIN unlocks everything: kids, chores, rewards, and undoing anyone's check-offs.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-6" id="accessKidsCard">
+        <div class="card shadow-sm">
+          <div class="card-header"><i class="bi bi-people me-1"></i>Kid PINs</div>
+          <ul class="list-group list-group-flush" id="kidPinsList"></ul>
         </div>
       </div>
     </div>
@@ -230,6 +265,46 @@
           <span class="text-muted small">points to redeem</span>
         </div>
         <button class="btn btn-primary btn-sm" type="submit">Save reward</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- PIN login overlay (shown when auth is required and nobody is signed in) -->
+<div class="position-fixed top-0 start-0 w-100 h-100 bg-body" id="loginOverlay" style="z-index:3000;display:none">
+  <div class="d-flex align-items-center justify-content-center h-100">
+    <div class="card shadow" style="width:min(360px,92vw)">
+      <div class="card-body p-4 text-center">
+        <div class="display-6 mb-2" id="loginEmoji">🔒</div>
+        <h5 class="mb-1">KiddoDash</h5>
+        <p class="text-muted small mb-3">Enter your PIN to sign in</p>
+        <form id="loginForm">
+          <input type="password" inputmode="numeric" autocomplete="off" autofocus
+                 class="form-control form-control-lg text-center mb-2" id="loginPin"
+                 placeholder="PIN" maxlength="8" style="letter-spacing:.4em">
+          <div class="text-danger small mb-2 d-none" id="loginError"></div>
+          <button class="btn btn-primary w-100" type="submit">Sign in</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Kid PIN modal (set/change/remove a kid's PIN) -->
+<div class="modal fade" id="kidPinModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title" id="kidPinModalTitle">Kid PIN</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="kidPinForm" class="modal-body vstack gap-2">
+        <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
+               id="kidPinInput" placeholder="4-digit PIN" maxlength="4">
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary btn-sm flex-grow-1" type="submit">Save PIN</button>
+          <button class="btn btn-outline-danger btn-sm" type="button" id="kidPinRemove">Remove</button>
+        </div>
       </form>
     </div>
   </div>

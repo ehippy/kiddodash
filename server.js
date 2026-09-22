@@ -3,6 +3,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 3000;
@@ -32,6 +33,8 @@ db.exec(`
     name        TEXT NOT NULL,
     color       TEXT NOT NULL DEFAULT '#7c3aed',
     emoji       TEXT NOT NULL DEFAULT '🙂',
+    pin_hash    TEXT,
+    pin_salt    TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -130,6 +133,14 @@ function migrate() {
     console.log('migrated: completions now unique per kid');
   }
 
+  const kidsSql = tableSql('kids');
+  if (kidsSql && !/pin_hash\s+TEXT/.test(kidsSql)) {
+    // Adding two nullable columns — no rebuild needed; kids without PINs simply
+    // have none until an admin sets one.
+    db.exec('ALTER TABLE kids ADD COLUMN pin_hash TEXT; ALTER TABLE kids ADD COLUMN pin_salt TEXT;');
+    console.log('migrated: kids table now supports login PINs');
+  }
+
   cleanUpOrphans();
 }
 
@@ -182,6 +193,178 @@ function loadSettings() {
 
 function saveSettings(settings) {
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// PINs & sessions
+// ---------------------------------------------------------------------------
+
+// scrypt at default N=16384 (~50-100ms) makes a 4-digit PIN brute-force
+// expensive without needing any tuning on a Raspberry Pi.
+function hashPin(pin, saltHex) {
+  return crypto.scryptSync(pin, Buffer.from(saltHex, 'hex'), 64).toString('hex');
+}
+
+function makePinHash(pin) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return { salt, hash: hashPin(pin, salt) };
+}
+
+function verifyPin(pin, saltHex, hashHex) {
+  if (!saltHex || !hashHex) return false;
+  const candidate = Buffer.from(hashPin(pin, saltHex), 'hex');
+  const stored = Buffer.from(hashHex, 'hex');
+  return candidate.length === stored.length && crypto.timingSafeEqual(candidate, stored);
+}
+
+const ADMIN_PIN_RE = /^\d{4,8}$/;
+const KID_PIN_RE = /^\d{4}$/;
+
+function loadAuthSettings() {
+  const s = loadSettings();
+  return { adminPinHash: s.adminPinHash || null, adminPinSalt: s.adminPinSalt || null };
+}
+
+function setAdminPin(pin) {
+  const s = loadSettings();
+  const { salt, hash } = makePinHash(pin);
+  s.adminPinHash = hash;
+  s.adminPinSalt = salt;
+  saveSettings(s);
+}
+
+// True once at least one PIN exists (env bootstrap or settings). While nothing
+// is configured the app stays fully open: no lockout target, no broken dev/test.
+function authConfigured() {
+  if (loadAuthSettings().adminPinHash) return true;
+  return db.prepare('SELECT COUNT(*) AS n FROM kids WHERE pin_hash IS NOT NULL').get().n > 0;
+}
+
+function adminPinMatches(pin) {
+  const { adminPinHash, adminPinSalt } = loadAuthSettings();
+  return !!adminPinHash && verifyPin(pin, adminPinSalt, adminPinHash);
+}
+
+function kidByPin(pin) {
+  for (const kid of db.prepare('SELECT * FROM kids WHERE pin_hash IS NOT NULL').all()) {
+    if (verifyPin(pin, kid.pin_salt, kid.pin_hash)) return kid;
+  }
+  return null;
+}
+
+// Throws when another kid already uses this PIN — kidByPin resolves by
+// scanning, so duplicate PINs would silently sign into the wrong account.
+function assertPinUnused(pin, exceptKidId) {
+  for (const other of db.prepare('SELECT id, name, pin_hash, pin_salt FROM kids WHERE pin_hash IS NOT NULL AND id != ?').all(exceptKidId)) {
+    if (verifyPin(pin, other.pin_salt, other.pin_hash)) {
+      const err = new Error(`That PIN is already ${other.name}'s`);
+      err.status = 409;
+      throw err;
+    }
+  }
+}
+
+function setKidPin(kidId, pin) {
+  if (pin === null) {
+    db.prepare('UPDATE kids SET pin_hash = NULL, pin_salt = NULL WHERE id = ?').run(kidId);
+    return;
+  }
+  const { salt, hash } = makePinHash(pin);
+  db.prepare('UPDATE kids SET pin_hash = ?, pin_salt = ? WHERE id = ?').run(hash, salt, kidId);
+}
+
+// One-time bootstrap from the environment so the very first deploy can seed
+// PINs without an already-authenticated admin. Existing PINs are never
+// overwritten by env, so restarts are idempotent.
+function bootstrapPinsFromEnv() {
+  if (!process.env.ADMIN_PIN && !loadAuthSettings().adminPinHash) {
+    console.log('no ADMIN_PIN set and no admin PIN configured — app runs unlocked (anyone can edit)');
+  }
+  if (process.env.ADMIN_PIN && !loadAuthSettings().adminPinHash) {
+    if (ADMIN_PIN_RE.test(process.env.ADMIN_PIN)) {
+      setAdminPin(process.env.ADMIN_PIN);
+      console.log('bootstrapped admin PIN from ADMIN_PIN env');
+    } else {
+      console.log('ignoring ADMIN_PIN env: must be 4-8 digits');
+    }
+  }
+  if (!authConfigured()) return;
+  for (const kid of db.prepare('SELECT * FROM kids').all()) {
+    const envPin = process.env[`KID_PIN_${kid.id}`];
+    if (envPin && !kid.pin_hash) {
+      if (KID_PIN_RE.test(envPin)) {
+        setKidPin(kid.id, envPin);
+        console.log(`bootstrapped PIN for ${kid.name} from KID_PIN_${kid.id} env`);
+      } else {
+        console.log(`ignoring KID_PIN_${kid.id} env: must be exactly 4 digits`);
+      }
+    }
+  }
+}
+
+// In-memory sessions: token -> { role, kidId, expires }. Restart signs everyone
+// out, which is fine for a LAN chore chart and keeps PINs out of long-lived state.
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const sessions = new Map();
+
+function createSession(session) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, { ...session, expires: Date.now() + SESSION_TTL_MS });
+  return token;
+}
+
+function getSession(req) {
+  let token = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.slice(7);
+  if (!token && req.headers.cookie) {
+    const match = /(?:^;\s*)?kd_session=([a-f0-9]+)/.exec(req.headers.cookie);
+    if (match) token = match[1];
+  }
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session) return null;
+  if (session.expires < Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  session.token = token;
+  return session;
+}
+
+function dropSession(token) {
+  sessions.delete(token);
+}
+
+// Brute-force guard: 10 failed PIN attempts per source IP per 10 minutes.
+const LOGIN_MAX_FAILS = 10;
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const loginFails = new Map(); // ip -> { count, resetAt }
+
+function loginThrottle(ip) {
+  const entry = loginFails.get(ip);
+  if (!entry || entry.resetAt < Date.now()) return null;
+  return entry.count >= LOGIN_MAX_FAILS ? Math.ceil((entry.resetAt - Date.now()) / 1000) : null;
+}
+
+function recordLoginFail(ip) {
+  const entry = loginFails.get(ip);
+  if (!entry || entry.resetAt < Date.now()) {
+    loginFails.set(ip, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
+  } else {
+    entry.count += 1;
+  }
+}
+
+function clearLoginFails(ip) {
+  loginFails.delete(ip);
+}
+
+function sessionCookie(token) {
+  // HttpOnly so XSS can't read it; the client also keeps its own copy in
+  // sessionStorage and sends it as a Bearer header — cross-site fetches can't
+  // set that header, which blocks CSRF without needing SameSite=None games.
+  return `kd_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +429,119 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const prepare = (sql) => db.prepare(sql);
 
+// Never ship PIN material to the client — only whether a kid has one.
+function publicKid(k) {
+  const { pin_hash, pin_salt, ...rest } = k;
+  return { ...rest, hasPin: !!pin_hash };
+}
+
+// --- Auth middleware ---------------------------------------------------------
+
+// Roles: 'admin' (everything), 'kid' (check own chores, redeem own rewards),
+// anonymous (read-only chart when auth is configured).
+function requireAdmin(req, res, next) {
+  if (!authConfigured()) return next(); // unlocked mode: no PINs set anywhere
+  const session = getSession(req);
+  if (session && session.role === 'admin') return next();
+  return sendError(res, 401, 'Admin sign-in required');
+}
+
+// Kid sessions may only touch completions/redemptions for themselves; `getKidId`
+// extracts whose record this request is about (body or lookup by route param).
+function requireAdminOrSelf(getKidId) {
+  return (req, res, next) => {
+    if (!authConfigured()) return next();
+    const session = getSession(req);
+    if (!session) return sendError(res, 401, 'Sign in required');
+    if (session.role === 'admin') return next();
+    if (session.role === 'kid' && getKidId(req) === session.kidId) return next();
+    return sendError(res, 403, 'That is for your own chores only');
+  };
+}
+
+const completionKidId = (req) => {
+  const row = db.prepare('SELECT kid_id FROM completions WHERE id = ?').get(req.params.id);
+  return row ? row.kid_id : null;
+};
+
+// --- Login endpoints ---------------------------------------------------------
+
+app.get('/api/auth/status', (req, res) => {
+  if (!authConfigured()) return res.json({ required: false, session: null });
+  const session = getSession(req);
+  if (!session) return res.json({ required: true, session: null });
+  if (session.role === 'admin') return res.json({ required: true, session: { role: 'admin' } });
+  const kid = prepare('SELECT id, name, color, emoji FROM kids WHERE id = ?').get(session.kidId);
+  res.json({ required: true, session: { role: 'kid', kid } });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const pin = String(req.body?.pin || '').trim();
+  if (!pin) return sendError(res, 400, 'PIN is required');
+  const ip = req.ip || 'unknown';
+  const retryAfter = loginThrottle(ip);
+  if (retryAfter !== null) {
+    res.set('Retry-After', String(retryAfter));
+    return sendError(res, 429, `Too many attempts — try again in ${retryAfter}s`);
+  }
+  if (ADMIN_PIN_RE.test(pin) && adminPinMatches(pin)) {
+    const token = createSession({ role: 'admin' });
+    clearLoginFails(ip);
+    res.setHeader('Set-Cookie', sessionCookie(token));
+    return res.json({ role: 'admin', token });
+  }
+  if (KID_PIN_RE.test(pin)) {
+    const kid = kidByPin(pin);
+    if (kid) {
+      const token = createSession({ role: 'kid', kidId: kid.id });
+      clearLoginFails(ip);
+      res.setHeader('Set-Cookie', sessionCookie(token));
+      return res.json({ role: 'kid', token, kid: { id: kid.id, name: kid.name, color: kid.color, emoji: kid.emoji } });
+    }
+  }
+  recordLoginFail(ip);
+  sendError(res, 401, 'Wrong PIN');
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const session = getSession(req);
+  if (session) dropSession(session.token);
+  res.setHeader('Set-Cookie', 'kd_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  res.json({ ok: true });
+});
+
+// --- PIN management (admin only) ----------------------------------------------
+
+// PUT /api/kids/:id/pin  { pin }  — pin null/empty removes the kid's PIN
+app.put('/api/kids/:id/pin', requireAdmin, (req, res) => {
+  const kid = prepare('SELECT * FROM kids WHERE id = ?').get(req.params.id);
+  if (!kid) return sendError(res, 404, 'Kid not found');
+  const raw = req.body?.pin;
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    setKidPin(kid.id, null);
+    return res.json({ ok: true, pinSet: false });
+  }
+  const pin = String(raw).trim();
+  if (!KID_PIN_RE.test(pin)) return sendError(res, 400, 'Kid PIN must be exactly 4 digits');
+  try {
+    assertPinUnused(pin, kid.id);
+    setKidPin(kid.id, pin);
+  } catch (e) {
+    return sendError(res, e.status || 500, e.message);
+  }
+  res.json({ ok: true, pinSet: true });
+});
+
+// PUT /api/auth/admin-pin  { pin }  — change the admin PIN
+app.put('/api/auth/admin-pin', requireAdmin, (req, res) => {
+  const pin = String(req.body?.pin || '').trim();
+  if (!ADMIN_PIN_RE.test(pin)) return sendError(res, 400, 'Admin PIN must be 4-8 digits');
+  if (KID_PIN_RE.test(pin) && kidByPin(pin)) return sendError(res, 409, 'That PIN belongs to a kid — pick another');
+  if (adminPinMatches(pin)) return sendError(res, 200, { ok: true, note: 'already the current admin PIN' });
+  setAdminPin(pin);
+  res.json({ ok: true });
+});
+
 // --- Health ----------------------------------------------------------------
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
@@ -253,7 +549,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISO
 // --- Kids --------------------------------------------------------------------
 
 app.get('/api/kids', (req, res) => {
-  const kids = prepare('SELECT * FROM kids ORDER BY id').all();
+  const kids = prepare('SELECT * FROM kids ORDER BY id').all().map(publicKid);
   const totals = prepare(
     `SELECT kid_id, COALESCE(SUM(points), 0) AS total
        FROM completions GROUP BY kid_id`
@@ -262,22 +558,28 @@ app.get('/api/kids', (req, res) => {
   res.json(kids.map((k) => ({ ...k, points: byKid.get(k.id) || 0 })));
 });
 
-app.post('/api/kids', (req, res) => {
-  const { name, color, emoji } = req.body || {};
+app.post('/api/kids', requireAdmin, (req, res) => {
+  const { name, color, emoji, pin } = req.body || {};
   if (!name || !String(name).trim()) return sendError(res, 400, 'Name is required');
+  const pinStr = pin === undefined || pin === null ? '' : String(pin).trim();
+  if (pinStr && !KID_PIN_RE.test(pinStr)) return sendError(res, 400, 'Kid PIN must be exactly 4 digits');
   try {
     const info = prepare('INSERT INTO kids (name, color, emoji) VALUES (?, ?, ?)').run(
       String(name).trim(),
       color || '#7c3aed',
       emoji || '🙂'
     );
-    res.status(201).json(prepare('SELECT * FROM kids WHERE id = ?').get(info.lastInsertRowid));
+    if (pinStr) {
+      assertPinUnused(pinStr, info.lastInsertRowid);
+      setKidPin(info.lastInsertRowid, pinStr);
+    }
+    res.status(201).json(publicKid(prepare('SELECT * FROM kids WHERE id = ?').get(info.lastInsertRowid)));
   } catch (e) {
     sendError(res, 500, e.message);
   }
 });
 
-app.put('/api/kids/:id', (req, res) => {
+app.put('/api/kids/:id', requireAdmin, (req, res) => {
   const kid = prepare('SELECT * FROM kids WHERE id = ?').get(req.params.id);
   if (!kid) return sendError(res, 404, 'Kid not found');
   const name = req.body.name !== undefined ? String(req.body.name).trim() : kid.name;
@@ -288,10 +590,10 @@ app.put('/api/kids/:id', (req, res) => {
     req.body.emoji || kid.emoji,
     kid.id
   );
-  res.json(prepare('SELECT * FROM kids WHERE id = ?').get(kid.id));
+  res.json(publicKid(prepare('SELECT * FROM kids WHERE id = ?').get(kid.id)));
 });
 
-app.delete('/api/kids/:id', (req, res) => {
+app.delete('/api/kids/:id', requireAdmin, (req, res) => {
   try {
     // FKs are enforced, so this kid's completions and redemptions cascade away in the
     // same transaction as the kid row itself.
@@ -316,7 +618,7 @@ app.get('/api/chores', (req, res) => {
   res.json(chores.map((c) => ({ ...c, doneToday: doneToday.get(c.id) || 0 })));
 });
 
-app.post('/api/chores', (req, res) => {
+app.post('/api/chores', requireAdmin, (req, res) => {
   const { title, points, frequency, dayOfWeek } = req.body || {};
   if (!title || !String(title).trim()) return sendError(res, 400, 'Title is required');
   const freq = ['daily', 'weekly', 'personal'].includes(frequency) ? frequency : 'weekly';
@@ -333,7 +635,7 @@ app.post('/api/chores', (req, res) => {
   }
 });
 
-app.put('/api/chores/:id', (req, res) => {
+app.put('/api/chores/:id', requireAdmin, (req, res) => {
   const chore = prepare('SELECT * FROM chores WHERE id = ?').get(req.params.id);
   if (!chore) return sendError(res, 404, 'Chore not found');
   const title = req.body.title !== undefined ? String(req.body.title).trim() : chore.title;
@@ -362,7 +664,7 @@ app.put('/api/chores/:id', (req, res) => {
   res.json(prepare('SELECT * FROM chores WHERE id = ?').get(chore.id));
 });
 
-app.delete('/api/chores/:id', (req, res) => {
+app.delete('/api/chores/:id', requireAdmin, (req, res) => {
   try {
     // FKs are enforced, so this chore's completions cascade away with it.
     const info = inTransaction(() => prepare('DELETE FROM chores WHERE id = ?').run(req.params.id));
@@ -391,7 +693,10 @@ app.get('/api/completions', (req, res) => {
 });
 
 // POST /api/completions  { choreId, kidId, date? }
-app.post('/api/completions', (req, res) => {
+app.post('/api/completions', requireAdminOrSelf((req) => {
+  const n = Number(req.body?.kidId);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}), (req, res) => {
   const { choreId, kidId, date } = req.body || {};
   const chore = prepare('SELECT * FROM chores WHERE id = ? AND active = 1').get(choreId);
   if (!chore) return sendError(res, 404, 'Chore not found');
@@ -418,7 +723,7 @@ app.post('/api/completions', (req, res) => {
 });
 
 // DELETE /api/completions/:id
-app.delete('/api/completions/:id', (req, res) => {
+app.delete('/api/completions/:id', requireAdminOrSelf(completionKidId), (req, res) => {
   const info = prepare('DELETE FROM completions WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return sendError(res, 404, 'Completion not found');
   res.json({ ok: true });
@@ -434,7 +739,7 @@ app.get('/api/week', (req, res) => {
       .map((t) => [t.kid_id, t.total])
   );
   const kids = prepare('SELECT * FROM kids ORDER BY id').all().map((k) => ({
-    ...k,
+    ...publicKid(k),
     points: totals.get(k.id) || 0
   }));
   const chores = prepare('SELECT * FROM chores WHERE active = 1 ORDER BY frequency, day_of_week, id').all();
@@ -508,7 +813,10 @@ app.get('/api/redeemptions', (req, res) => {
 });
 
 // POST /api/redeem  { kidId, reward: { label, points } }
-app.post('/api/redeem', (req, res) => {
+app.post('/api/redeem', requireAdminOrSelf((req) => {
+  const n = Number(req.body?.kidId);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}), (req, res) => {
   const { kidId, reward } = req.body || {};
   const label = reward && String(reward.label || '').trim();
   const points = reward && Number(reward.points);
@@ -565,9 +873,12 @@ app.get('/api/totals', (req, res) => {
 
 // --- Settings -----------------------------------------------------------------------
 
-app.get('/api/settings', (req, res) => res.json(loadSettings()));
+app.get('/api/settings', (req, res) => {
+  const { adminPinHash, adminPinSalt, ...publicSettings } = loadSettings();
+  res.json(publicSettings);
+});
 
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', requireAdmin, (req, res) => {
   const current = loadSettings();
   const body = req.body || {};
   const next = { ...current };
@@ -579,6 +890,8 @@ app.put('/api/settings', (req, res) => {
   saveSettings(next);
   res.json(next);
 });
+
+bootstrapPinsFromEnv();
 
 app.listen(PORT, () => {
   console.log(`KiddoDash chore chart running on http://localhost:${PORT}`);

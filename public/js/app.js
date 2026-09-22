@@ -9,6 +9,16 @@ const state = {
   kidTotals: [], // from /api/totals: earned, spent, balance
   recentSpends: [], // from /api/redeemptions
   weekOffset: 0, // 0 = current week
+  authRequired: false, // true once any PIN is configured server-side
+  session: null, // { role: 'admin' } | { role: 'kid', kid: {...} } | null
+};
+
+// Session token lives in sessionStorage: cross-site fetches can't set the
+// Authorization header, so the Bearer token doubles as our CSRF defense.
+const authToken = {
+  get: () => sessionStorage.getItem('kiddodash-token'),
+  set: (t) => sessionStorage.setItem('kiddodash-token', t),
+  clear: () => sessionStorage.removeItem('kiddodash-token'),
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -20,9 +30,12 @@ const esc = (s) =>
 /* ============================ API ============================ */
 
 async function api(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = authToken.get();
+  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -65,6 +78,77 @@ function weekDates(offset) {
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAYS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/* ============================ Auth ============================ */
+
+function isAdmin() {
+  return !state.authRequired || state.session?.role === 'admin';
+}
+
+function myKidId() {
+  return state.session?.role === 'kid' ? state.session.kid.id : null;
+}
+
+function applyRoleUI() {
+  const admin = isAdmin();
+  const kid = myKidId();
+  // Admin-only tabs
+  $('#tab-settings').classList.toggle('d-none', !admin);
+  $('#tab-sub-access').closest('.nav-item').classList.toggle('d-none', !admin);
+  // Anything marked admin-only (reward edit/delete, Access pill)
+  document.querySelectorAll('[data-admin-only]').forEach((el) => {
+    el.classList.toggle('d-none', !admin);
+  });
+  if (!admin && $('#pane-settings').classList.contains('show')) {
+    bootstrap.Tab.getOrCreateInstance($('#tab-chart')).show();
+  }
+  // Rewards: kids redeem only their own — hide other kids in the pickers
+  // (handled in loadRewardsTab).
+  // Nav identity
+  const badge = $('#whoBadge');
+  const signOut = $('#btnSignOut');
+  if (state.session) {
+    badge.classList.remove('d-none');
+    signOut.classList.remove('d-none');
+    if (state.session.role === 'admin') {
+      badge.textContent = '👑 Admin';
+      badge.className = 'badge text-bg-warning';
+    } else {
+      badge.textContent = `${state.session.kid.emoji} ${state.session.kid.name}`;
+      badge.style.background = state.session.kid.color;
+      badge.className = 'badge text-light';
+    }
+  } else {
+    badge.classList.add('d-none');
+    signOut.classList.add('d-none');
+  }
+}
+
+function showLogin(required) {
+  $('#loginOverlay').style.display = required ? 'flex' : 'none';
+  if (required) $('#loginPin').focus();
+}
+
+async function refreshAuth() {
+  const status = await api('/api/auth/status');
+  state.authRequired = status.required;
+  state.session = status.session;
+  if (!status.required) authToken.clear();
+  if (status.required && !status.session && authToken.get()) authToken.clear(); // stale token
+  applyRoleUI();
+  showLogin(state.authRequired && !state.session);
+}
+
+async function doLogin(pin) {
+  const res = await api('/api/auth/login', { method: 'POST', body: { pin } });
+  authToken.set(res.token);
+  state.session = res.role === 'admin' ? { role: 'admin' } : { role: 'kid', kid: res.kid };
+  applyRoleUI();
+  showLogin(false);
+  $('#loginPin').value = '';
+  $('#loginError').classList.add('d-none');
+  await Promise.all([refreshWeek(), refreshRewards()]);
+}
 
 /* ============================ Chart tab ============================ */
 
@@ -118,12 +202,14 @@ function loadWeek() {
           const parts = [];
           for (const k of doneKids) {
             const c = doneMap[k.id];
+            const undoable = isAdmin() || myKidId() === c.kidId;
             parts.push(`<button class="cell-btn done" style="background:${esc(c.kidColor)}"
-                  data-undo="${c.id}" data-kid="${esc(c.kidName)}" title="Click to undo">
+                  ${undoable ? `data-undo="${c.id}" title="Click to undo"` : 'disabled title="Only a parent can undo this"'}
+                  data-kid="${esc(c.kidName)}">
                   <i class="bi bi-check-lg"></i>${esc(c.kidEmoji)} ${esc(c.kidName)}
                 </button>`);
           }
-          if (remaining > 0) {
+          if (remaining > 0 && (isAdmin() || myKidId() !== null)) {
             const hint =
               chore.frequency === 'personal'
                 ? `${esc(chore.title)} — ${remaining} kid${remaining > 1 ? 's' : ''} to go`
@@ -164,6 +250,7 @@ async function refreshWeek() {
   loadWeek();
   loadKidsTab();
   loadChoresTab();
+  applyRoleUI(); // re-apply after re-render (chart buttons depend on role)
 }
 
 async function openCellPicker(choreId, date) {
@@ -177,7 +264,8 @@ async function openCellPicker(choreId, date) {
       '<div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Kids tab), then check off chores.</div>';
   } else {
     const doneMap = (state.weekGrid?.[Number(choreId)] || {})[date] || {};
-    const available = state.kids.filter((k) => !doneMap[k.id]);
+    const mine = myKidId();
+    const available = state.kids.filter((k) => !doneMap[k.id] && (mine === null || k.id === mine));
     $('#cellModalBody').innerHTML = available.length
       ? `<div class="vstack gap-2">${available
           .map(
@@ -271,6 +359,34 @@ function loadKidsTab() {
     .join('');
 }
 
+/* ============================ Access tab ============================ */
+
+function loadAccessTab() {
+  const admin = isAdmin();
+  $('#accessAdminCard').classList.toggle('d-none', !admin);
+  $('#accessKidsCard').classList.toggle('d-none', !admin);
+  const list = $('#kidPinsList');
+  if (!list) return;
+  if (!state.kids.length) {
+    list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-people"></i>No kids yet.</li>';
+    return;
+  }
+  list.innerHTML = state.kids
+    .map(
+      (k) => `<li class="list-group-item">
+        <div class="d-flex align-items-center gap-3">
+          <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
+          <span class="fw-bold flex-grow-1">${esc(k.name)}</span>
+          <span class="badge ${k.hasPin ? 'text-bg-success' : 'text-bg-secondary'}">${k.hasPin ? 'PIN set' : 'no PIN'}</span>
+          <button class="btn btn-sm btn-outline-primary" data-kidpin="${k.id}">
+            <i class="bi bi-key me-1"></i>${k.hasPin ? 'Change' : 'Set PIN'}
+          </button>
+        </div>
+      </li>`
+    )
+    .join('');
+}
+
 /* ============================ Chores tab ============================ */
 
 function loadChoresTab() {
@@ -319,7 +435,9 @@ function loadRewardsTab() {
   const byId = new Map(state.kidTotals.map((t) => [t.id, t]));
   list.innerHTML = s.rewards
     .map((r) => {
-      const kidOpts = state.kidTotals
+      const mine = myKidId();
+      const eligible = mine === null ? state.kidTotals : state.kidTotals.filter((t) => t.id === mine);
+      const kidOpts = eligible
         .map((t) => {
           const can = t.balance >= r.points;
           return `<option value="${t.id}" ${can ? '' : 'disabled'}>
@@ -332,11 +450,11 @@ function loadRewardsTab() {
           <span class="fw-bold flex-grow-1">${esc(r.label)}</span>
           <span class="badge text-bg-warning">${r.points} pts</span>
           <select class="form-select form-select-sm d-none d-sm-inline-block w-auto" data-redeemkid="${r.id}">
-            <option value="">Pick a kid…</option>${kidOpts}
+            ${mine === null ? '<option value="">Pick a kid…</option>' : ''}${kidOpts}
           </select>
           <button class="btn btn-sm btn-primary" data-redeem="${r.id}" title="Redeem for the selected kid"><i class="bi bi-check-lg me-1"></i>Redeem</button>
-          <button class="btn btn-sm btn-outline-secondary" data-editreward='${esc(JSON.stringify(r))}'><i class="bi bi-pencil"></i></button>
-          <button class="btn btn-sm btn-outline-danger" data-delreward="${r.id}"><i class="bi bi-trash"></i></button>
+          <button class="btn btn-sm btn-outline-secondary d-none" data-admin-only data-editreward='${esc(JSON.stringify(r))}'><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger d-none" data-admin-only data-delreward="${r.id}"><i class="bi bi-trash"></i></button>
         </div>`;
     })
     .join('');
@@ -397,6 +515,7 @@ async function refreshRewards() {
   state.recentSpends = spends;
   renderBalances();
   renderRecentSpends();
+  applyRoleUI(); // reward edit/delete buttons follow the role
   loadRewardsTab(); // re-render redeem selects with fresh balances
   loadKidsTab(); // kid cards now show balance, not lifetime earned
 }
@@ -453,10 +572,12 @@ document.addEventListener('DOMContentLoaded', () => {
           name: $('#kidName').value.trim(),
           color: $('#kidColor').value,
           emoji: $('#kidEmoji').value.trim() || '🙂',
+          pin: $('#kidPin').value.trim() || undefined,
         },
       });
       toast(`${kid.emoji} ${kid.name} added!`);
       $('#kidName').value = '';
+      $('#kidPin').value = '';
       await Promise.all([refreshWeek()]);
     } catch (err) {
       toast(err.message, 'danger');
@@ -582,7 +703,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const reward = state.settings.rewards.find((r) => r.id === Number(redeem.dataset.redeem));
       if (!reward) return;
       const sel = $(`[data-redeemkid="${reward.id}"]`);
-      const kidId = sel ? Number(sel.value) : 0;
+      // A signed-in kid has exactly one option in their picker — use it implicitly.
+      const auto = myKidId() !== null ? myKidId() : 0;
+      const kidId = sel && sel.value ? Number(sel.value) : auto;
       if (!kidId) return toast('Pick a kid first', 'warning');
       try {
         const res = await api('/api/redeem', { method: 'POST', body: { kidId, reward } });
@@ -637,12 +760,78 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
+  // ---- Auth ----
+  $('#loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('#loginError');
+    err.classList.add('d-none');
+    try {
+      await doLogin($('#loginPin').value.trim());
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.classList.remove('d-none');
+      $('#loginPin').select();
+    }
+  });
+  $('#btnSignOut').addEventListener('click', async () => {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+    authToken.clear();
+    location.reload();
+  });
+  $('#adminPinForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pin = $('#adminPinInput').value.trim();
+    if (!/^\d{4,8}$/.test(pin)) return toast('Admin PIN must be 4-8 digits', 'warning');
+    try {
+      await api('/api/auth/admin-pin', { method: 'PUT', body: { pin } });
+      $('#adminPinInput').value = '';
+      toast('Admin PIN updated');
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
+  let kidPinCtx = null;
+  const kidPinModal = () => bootstrap.Modal.getOrCreateInstance('#kidPinModal');
+  $('#kidPinsList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-kidpin]');
+    if (!btn) return;
+    const kid = state.kids.find((k) => k.id === Number(btn.dataset.kidpin));
+    if (!kid) return;
+    kidPinCtx = kid;
+    $('#kidPinModalTitle').textContent = `${kid.emoji} ${kid.name}'s PIN`;
+    $('#kidPinInput').value = '';
+    kidPinModal().show();
+  });
+  $('#kidPinForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!kidPinCtx) return;
+    const pin = $('#kidPinInput').value.trim();
+    if (!/^\d{4}$/.test(pin)) return toast('Kid PIN must be exactly 4 digits', 'warning');
+    try {
+      await api(`/api/kids/${kidPinCtx.id}/pin`, { method: 'PUT', body: { pin } });
+      kidPinModal().hide();
+      toast(`${kidPinCtx.name}'s PIN saved`);
+      await refreshAuth();
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+  $('#kidPinRemove').addEventListener('click', async () => {
+    if (!kidPinCtx) return;
+    try {
+      await api(`/api/kids/${kidPinCtx.id}/pin`, { method: 'PUT', body: { pin: null } });
+      kidPinModal().hide();
+      toast(`${kidPinCtx.name}'s PIN removed`, 'secondary');
+      await refreshAuth();
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
   // Tab switching refresh
   const tabActions = {
     'pane-chart': () => refreshWeek(),
     'pane-settings': () => refreshWeek(),
     'pane-kids': () => refreshWeek(),
     'pane-chores': () => refreshWeek(),
+    'pane-access': () => loadAccessTab(),
     'pane-rewards': () => refreshRewards(),
   };
   document.querySelectorAll('[data-bs-toggle="pill"]').forEach((btn) => {
@@ -652,10 +841,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Initial load
-  Promise.all([api('/api/settings'), refreshWeek()])
+  // Initial load — auth first, chart only once the overlay situation is known
+  refreshAuth()
+    .then(() => Promise.all([api('/api/settings'), refreshWeek()]))
     .then(([settings]) => {
       state.settings = settings;
+      applyRoleUI();
       refreshRewards();
     })
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));

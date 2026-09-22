@@ -41,7 +41,12 @@ async function bootServer({ dataDir, env = {} } = {}) {
   const port = await freePort();
   const log = [];
   const child = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, DATA_DIR: dir, PORT: String(port) },
+    // Tests control the server's environment fully: a PIN-config test passes
+    // ADMIN_PIN itself, and must not inherit one from the developer's shell.
+    env: Object.fromEntries(
+      Object.entries({ ...process.env, DATA_DIR: dir, PORT: String(port), ADMIN_PIN: '', ...env })
+        .filter(([k]) => !/^KID_PIN_\d+$/.test(k) || env[k] !== undefined)
+    ),
   });
   child.stdout.on('data', (d) => log.push(String(d).trim()));
   child.stderr.on('data', (d) => log.push(String(d).trim()));
