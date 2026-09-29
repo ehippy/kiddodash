@@ -112,6 +112,30 @@ function doneThisWeek(chore, grid) {
   return out;
 }
 
+// Shared custody: strictly alternating 7-day stretches starting (home) on
+// custody.homeStart, with single-date exceptions. Away days have no chores due.
+function isAway(ds) {
+  const c = state.settings?.custody;
+  if (!c?.enabled || !c.homeStart) return false;
+  const pinned = c.exceptions?.[ds];
+  if (pinned) return pinned === 'away';
+  const days = Math.round((Date.parse(ds + 'T00:00:00Z') - Date.parse(c.homeStart + 'T00:00:00Z')) / 86400000);
+  return Math.floor(days / 7) % 2 !== 0;
+}
+
+// First date on/after `ds` whose home/away status is `away` (false = next home day).
+function nextSwitch(ds, away) {
+  const d = new Date(ds + 'T00:00:00');
+  for (let i = 0; i < 120; i++) {
+    if (isAway(dateStr(d)) === away) return dateStr(d);
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+}
+
+const fmtDay = (ds) =>
+  new Date(ds + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+
 function freqBadgeHtml(chore) {
   if (chore.frequency === 'due_by') {
     return `<span class="badge text-bg-primary freq-badge">each kid, by ${DAY_NAMES[chore.days?.[0]] ?? '?'}</span>`;
@@ -352,9 +376,20 @@ function renderTodayBoard() {
   const today = dateStr(now);
   const dates = weekDates(0);
   $('#todayLabel').textContent = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  $('#todayHelp').classList.toggle('d-none', isAway(today));
 
   if (!state.kids.length) {
     board.innerHTML = '<div class="col-12"><div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Settings → Kids).</div></div>';
+    return;
+  }
+  if (isAway(today)) {
+    const back = nextSwitch(today, false);
+    const faces = state.kids.map((k) => `<span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>`).join('');
+    board.innerHTML = `<div class="col-12 col-lg-8"><div class="away-board">
+        <div class="away-faces">${faces}</div>
+        <div class="away-title">At the other house</div>
+        <div class="away-sub">${back ? `Back ${esc(fmtDay(back))} 🏠` : 'See you soon 🏠'} · no chores until then</div>
+      </div></div>`;
     return;
   }
   // A signed-in kid sees their own card first.
@@ -462,7 +497,7 @@ function choreCellsHtml(chore, dates, today) {
     .map((d) => {
       const ds = dateStr(d);
       const doneMap = grid[chore.id]?.[ds] || {};
-      const due = choreIsDueOn(chore, d.getDay());
+      const due = choreIsDueOn(chore, d.getDay()) && !isAway(ds);
       const parts = [];
       if (isPerKid(chore)) {
         for (const kid of state.kids) {
@@ -488,15 +523,17 @@ function dueByCellsHtml(chore, dates, today) {
   const dateStrs = dates.map(dateStr);
   const slotDs = dateStrs.includes(today) ? today : deadline;
   const slotState = slotDs === today ? (today > deadline ? 'late' : 'todo') : slotDs < today ? 'missed' : 'future';
+  const weekAway = dateStrs.every(isAway); // a whole away stretch: nothing owed
+  const showSlots = !weekAway && !isAway(slotDs);
   return dateStrs
     .map((ds) => {
       const parts = [];
       for (const kid of state.kids) {
         const d = done.get(kid.id);
         if (d?.date === ds) parts.push(avatarHtml(kid, { state: 'done', completion: d.completion, late: ds > deadline }));
-        else if (!d && ds === slotDs) parts.push(avatarHtml(kid, { state: slotState, date: ds, choreId: chore.id }));
+        else if (!d && ds === slotDs && showSlots) parts.push(avatarHtml(kid, { state: slotState, date: ds, choreId: chore.id }));
       }
-      if (ds === deadline) parts.push('<span class="due-tag">due</span>');
+      if (ds === deadline && !weekAway) parts.push('<span class="due-tag">due</span>');
       return cellHtml(parts);
     })
     .join('');
@@ -511,9 +548,9 @@ function loadWeek() {
 
   $('#chartHead').innerHTML = `<tr><th class="chore-title-head">Chore</th>${dates
     .map(
-      (d) => `<th class="text-center ${dateStr(d) === today ? 'today-col' : ''}">
+      (d) => `<th class="text-center ${dateStr(d) === today ? 'today-col' : ''}${isAway(dateStr(d)) ? ' away-col' : ''}">
         ${DAY_NAMES[d.getDay()]}
-        <div class="day-num">${d.getDate()}</div>
+        <div class="day-num">${isAway(dateStr(d)) ? 'away' : d.getDate()}</div>
       </th>`
     )
     .join('')}</tr>`;
@@ -559,7 +596,12 @@ function loadWeek() {
     .map(([label, list]) => `<tr class="group-row"><th colspan="8"><span class="group-label">${label}</span></th></tr>${list.map(row).join('')}`)
     .join('');
 
-  // Tint today's column in the body too; +1 skips the title cell.
+  // Gray out away days, column by column; +1 skips the title cell.
+  dates.forEach((d, i) => {
+    if (isAway(dateStr(d))) body.querySelectorAll('tr:not(.group-row)').forEach((tr) => tr.children[i + 1]?.classList.add('away-col'));
+  });
+
+  // Tint today's column in the body too.
   const todayIdx = dates.findIndex((d) => dateStr(d) === today);
   if (todayIdx >= 0) {
     body.querySelectorAll('tr:not(.group-row)').forEach((tr) => tr.children[todayIdx + 1]?.classList.add('today-col'));
@@ -636,6 +678,34 @@ async function openCellPicker(choreId, date) {
 
 // Context for the cell being picked (chore + date)
 let pickCtx = null;
+
+/* ============================ Custody settings ============================ */
+
+function renderCustodySettings() {
+  const c = state.settings?.custody || { enabled: false, homeStart: null, exceptions: {} };
+  $('#custodyEnabled').checked = !!c.enabled;
+  $('#custodyHomeStart').value = c.homeStart || '';
+  const today = dateStr(new Date());
+  const status = $('#custodyStatus');
+  if (c.enabled) {
+    const away = isAway(today);
+    const next = nextSwitch(today, !away);
+    status.innerHTML = `<i class="bi bi-${away ? 'house-dash' : 'house-check'} me-1"></i>Now: <strong>${away ? 'away' : 'home'}</strong>${
+      next ? ` · ${away ? 'back' : 'leaving'} ${esc(fmtDay(next))}` : ''}`;
+  } else {
+    status.textContent = 'Off — every day counts as a home day.';
+  }
+  const rows = Object.entries(c.exceptions || {}).sort(([a], [b]) => a.localeCompare(b));
+  $('#custodyExceptions').innerHTML = rows.length
+    ? rows
+        .map(([d, v]) => `<li class="list-group-item d-flex align-items-center gap-2 px-0">
+            <span class="badge ${v === 'home' ? 'text-bg-success' : 'text-bg-secondary'}">${v}</span>
+            <span class="flex-grow-1">${esc(fmtDay(d))}${d < today ? ' <span class="text-muted small">(past)</span>' : ''}</span>
+            <button class="btn btn-sm btn-outline-danger" data-del-exception="${d}" title="Remove"><i class="bi bi-x-lg"></i></button>
+          </li>`)
+        .join('')
+    : '<li class="list-group-item px-0 text-muted small">No exceptions.</li>';
+}
 
 /* ============================ Kids tab ============================ */
 
@@ -1076,6 +1146,45 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
+  // ---- Custody schedule ----
+  const saveCustody = async (patch, msg) => {
+    const current = state.settings.custody || { enabled: false, homeStart: null, exceptions: {} };
+    try {
+      state.settings = await api('/api/settings', { method: 'PUT', body: { custody: { ...current, ...patch } } });
+      renderCustodySettings();
+      await refreshWeek();
+      if (msg) toast(msg);
+    } catch (err) { toast(err.message, 'danger'); }
+  };
+  $('#custodyEnabled').addEventListener('change', (e) => {
+    const homeStart = $('#custodyHomeStart').value || null;
+    if (e.target.checked && !homeStart) {
+      e.target.checked = false;
+      $('#custodyHomeStart').focus();
+      return toast('Pick a day they arrive first', 'warning');
+    }
+    saveCustody({ enabled: e.target.checked, homeStart }, e.target.checked ? 'Custody schedule on' : 'Custody schedule off');
+  });
+  $('#custodyHomeStart').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    saveCustody({ homeStart: e.target.value, enabled: $('#custodyEnabled').checked }, 'Schedule updated');
+  });
+  $('#custodyExceptionForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const date = $('#custodyExDate').value;
+    if (!date) return;
+    const exceptions = { ...(state.settings.custody?.exceptions || {}), [date]: $('#custodyExKind').value };
+    $('#custodyExDate').value = '';
+    saveCustody({ exceptions }, 'Exception added');
+  });
+  $('#custodyExceptions').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-del-exception]');
+    if (!btn) return;
+    const exceptions = { ...(state.settings.custody?.exceptions || {}) };
+    delete exceptions[btn.dataset.delException];
+    saveCustody({ exceptions }, 'Exception removed');
+  });
+
   $('#rewardForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = $('#rewardId').value;
@@ -1260,6 +1369,7 @@ document.addEventListener('DOMContentLoaded', () => {
     .then((settings) => {
       state.settings = settings;
       $('#weekStartDay').value = String(settings.weekStartDay ?? 1);
+      renderCustodySettings();
       applyRoleUI();
       return Promise.all([refreshWeek(), refreshRewards()]);
     })

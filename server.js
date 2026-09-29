@@ -239,6 +239,10 @@ migrate();
 const DEFAULT_SETTINGS = {
   pointsPerCompletion: 1,
   weekStartDay: 1, // 0=Sunday .. 6=Saturday; default Monday
+  // Shared custody: strictly alternating 7-day stretches, home first from
+  // `homeStart` (a day the kids arrive). `exceptions` pins single dates to
+  // 'home' or 'away' for holidays and swaps. Away days have no chores due.
+  custody: { enabled: false, homeStart: null, exceptions: {} },
   rewards: [
     { id: 1, label: 'Pick the dinner menu', points: 10 },
     { id: 2, label: 'Extra 30 min screen time', points: 15 },
@@ -1005,8 +1009,19 @@ app.put('/api/settings', requireAdmin, (req, res) => {
     if (!Number.isInteger(wsd) || wsd < 0 || wsd > 6) return sendError(res, 400, 'weekStartDay must be 0-6');
     next.weekStartDay = wsd;
   }
+  if (body.custody !== undefined) {
+    const c = body.custody || {};
+    const isDate = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d));
+    if (c.homeStart != null && !isDate(c.homeStart)) return sendError(res, 400, 'custody.homeStart must be YYYY-MM-DD');
+    const exceptions = {};
+    for (const [d, v] of Object.entries(c.exceptions || {})) {
+      if (isDate(d) && (v === 'home' || v === 'away')) exceptions[d] = v;
+    }
+    next.custody = { enabled: !!c.enabled && !!c.homeStart, homeStart: c.homeStart || null, exceptions };
+  }
   saveSettings(next);
-  res.json(next);
+  const { adminPinHash, adminPinSalt, ...publicSettings } = next; // never echo the PIN hash
+  res.json(publicSettings);
 });
 
 bootstrapPinsFromEnv();
