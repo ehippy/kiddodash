@@ -41,6 +41,12 @@ test('deleting a kid cascades to its completions and redemptions', async () => {
     assert.deepEqual(totalsAfterSpend.body, [
       { id: 1, name: 'Ada', color: '#7c3aed', emoji: '🚀', earned: 10, spent: 10, balance: 0 }
     ]);
+    // The "Recently spent" list renders these camelCase keys.
+    const spends = await srv.api('GET', '/api/redeemptions');
+    assert.equal(spends.body[0].rewardLabel, 'Ice cream');
+    assert.equal(spends.body[0].kidName, 'Ada');
+    assert.equal(spends.body[0].kidEmoji, '🚀');
+    assert.ok(spends.body[0].createdAt);
 
     assert.equal(srv.scalar('SELECT COUNT(*) FROM completions'), 2);
     assert.equal(srv.scalar('SELECT COUNT(*) FROM redemptions'), 1);

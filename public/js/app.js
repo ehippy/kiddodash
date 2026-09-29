@@ -548,7 +548,7 @@ function renderRecentSpends() {
         <span class="kid-avatar" style="background:${esc(r.kidColor)};width:28px;height:28px;font-size:0.9rem">${esc(r.kidEmoji)}</span>
         <div class="flex-grow-1">
           <div class="fw-bold">${esc(r.rewardLabel)}</div>
-          <div class="text-muted small">${esc(r.kidName)} · ${new Date(r.created_at + 'Z').toLocaleDateString()}</div>
+          <div class="text-muted small">${esc(r.kidName)} · ${new Date(r.createdAt + 'Z').toLocaleDateString()}</div>
         </div>
         <span class="badge text-bg-warning">−${r.points}</span>
       </li>`

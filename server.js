@@ -864,7 +864,10 @@ app.get('/api/redeemptions', (req, res) => {
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
   res.json(
     prepare(
-      `SELECT r.*, k.name AS kid_name, k.color AS kid_color, k.emoji AS kid_emoji
+      // camelCase to match the POST /api/redeem response the UI already renders
+      `SELECT r.id, r.kid_id AS kidId, r.reward_label AS rewardLabel, r.points,
+              r.created_at AS createdAt,
+              k.name AS kidName, k.color AS kidColor, k.emoji AS kidEmoji
          FROM redemptions r
          JOIN kids k ON k.id = r.kid_id
         ORDER BY r.created_at DESC, r.id DESC
