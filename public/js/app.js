@@ -95,7 +95,26 @@ function choreIsDueOn(chore, dow) {
   return false;
 }
 
+// 'due_by' chores: each kid does it once per chart week, on any day; the chosen
+// day is the deadline. These read the week grid, so they cover the week on screen.
+function deadlineDate(chore, dates) {
+  const d = dates.find((x) => x.getDay() === chore.days?.[0]);
+  return d ? dateStr(d) : null;
+}
+
+// kidId -> { date, completion } for every kid who did this chore this week
+function doneThisWeek(chore) {
+  const out = new Map();
+  for (const [ds, byKid] of Object.entries((state.weekGrid || {})[chore.id] || {})) {
+    for (const [kidId, c] of Object.entries(byKid)) out.set(Number(kidId), { date: ds, completion: c });
+  }
+  return out;
+}
+
 function freqBadgeHtml(chore) {
+  if (chore.frequency === 'due_by') {
+    return `<span class="badge text-bg-primary freq-badge">each kid, by ${DAY_NAMES[chore.days?.[0]] ?? '?'}</span>`;
+  }
   if (chore.frequency === 'daily') return '<span class="badge text-bg-info freq-badge">daily</span>';
   if (chore.frequency === 'schooldays') return '<span class="badge text-bg-info freq-badge">each kid, school nights</span>';
   const daysLabel = chore.days && chore.days.length
@@ -117,6 +136,21 @@ function renderChoreDaysPicker(container, idPrefix, freq, selectedDays) {
     return;
   }
   const selected = new Set(selectedDays || []);
+  if (freq === 'due_by') {
+    // One deadline day: radios sharing a name, read back by readChoreDaysPicker.
+    const pick = selected.size ? [...selected][0] : WEEK_ORDER[WEEK_ORDER.length - 1];
+    container.innerHTML = `
+      <div class="btn-group btn-group-sm chore-days-picker" role="group">
+        ${WEEK_ORDER.map((d) => {
+          const id = `${idPrefix}-${d}`;
+          return `<input type="radio" class="btn-check" name="${idPrefix}" id="${id}" value="${d}" autocomplete="off"${d === pick ? ' checked' : ''}>
+                  <label class="btn btn-outline-secondary" for="${id}">${DAY_NAMES[d]}</label>`;
+        }).join('')}
+      </div>
+      <div class="form-text">Due by this day — can be done any day that week</div>
+    `;
+    return;
+  }
   container.innerHTML = `
     <div class="btn-group btn-group-sm chore-days-picker" role="group">
       ${WEEK_ORDER.map((d) => {
@@ -261,7 +295,7 @@ function loadWeek() {
   }
   body.innerHTML = activeChores
     .map((chore) => {
-      const cells = dates
+      const cells = chore.frequency === 'due_by' ? dueByCellsHtml(chore, dates, today) : dates
         .map((d) => {
           const ds = dateStr(d);
           const isDue = choreIsDueOn(chore, d.getDay());
@@ -271,16 +305,7 @@ function loadWeek() {
           // personal and schooldays chores are done once per kid; the rest are shared
           const perKid = chore.frequency === 'personal' || chore.frequency === 'schooldays';
           const remaining = due && (perKid ? state.kids.length - doneKids.length : doneMap ? 0 : 1);
-          const parts = [];
-          for (const k of doneKids) {
-            const c = doneMap[k.id];
-            const undoable = isAdmin() || myKidId() === c.kidId;
-            parts.push(`<button class="cell-btn done" style="background:${esc(c.kidColor)}"
-                  ${undoable ? `data-undo="${c.id}" title="Click to undo"` : 'disabled title="Only a parent can undo this"'}
-                  data-kid="${esc(c.kidName)}">
-                  <i class="bi bi-check-lg"></i>${esc(c.kidEmoji)} ${esc(c.kidName)}
-                </button>`);
-          }
+          const parts = doneKids.map((k) => doneBtnHtml(doneMap[k.id]));
           if (remaining > 0 && (isAdmin() || myKidId() !== null)) {
             const hint =
               perKid
@@ -297,6 +322,42 @@ function loadWeek() {
         <td class="chore-title-cell ps-2">${esc(chore.title)}<span class="chore-pts">${chore.points} pt${chore.points > 1 ? 's' : ''}</span>${freqBadgeHtml(chore)}</td>
         ${cells}
       </tr>`;
+    })
+    .join('');
+}
+
+function doneBtnHtml(c, late = false) {
+  const undoable = isAdmin() || myKidId() === c.kidId;
+  return `<button class="cell-btn done" style="background:${esc(c.kidColor)}"
+        ${undoable ? `data-undo="${c.id}" title="${late ? 'Done late — click' : 'Click'} to undo"` : `disabled title="${late ? 'Done late. ' : ''}Only a parent can undo this"`}
+        data-kid="${esc(c.kidName)}">
+        <i class="bi bi-${late ? 'clock-history' : 'check-lg'}"></i>${esc(c.kidEmoji)} ${esc(c.kidName)}
+      </button>`;
+}
+
+// A due_by row: each kid's check shows on the day they actually did it (a clock
+// icon if after the deadline). The ✎ sits in today's column, or on the deadline
+// for other weeks, and turns amber once the deadline has passed.
+function dueByCellsHtml(chore, dates, today) {
+  const deadline = deadlineDate(chore, dates);
+  const done = doneThisWeek(chore);
+  const remaining = state.kids.length - state.kids.filter((k) => done.has(k.id)).length;
+  const dateStrs = dates.map(dateStr);
+  const pencilDs = dateStrs.includes(today) ? today : deadline;
+  const canAct = isAdmin() || myKidId() !== null;
+  return dateStrs
+    .map((ds) => {
+      const parts = state.kids
+        .filter((k) => done.get(k.id)?.date === ds)
+        .map((k) => doneBtnHtml(done.get(k.id).completion, ds > deadline));
+      if (ds === pencilDs && remaining > 0 && canAct) {
+        const overdue = ds > deadline;
+        const hint = `${esc(chore.title)} — ${remaining} kid${remaining > 1 ? 's' : ''} to go${overdue ? ' (overdue)' : ''}`;
+        parts.push(`<button class="cell-btn${overdue ? ' overdue' : ''}" data-chore="${chore.id}" data-date="${ds}" title="${hint}">${overdue ? '<i class="bi bi-exclamation-circle"></i> late' : '✎'}</button>`);
+      }
+      if (ds === deadline) parts.push('<span class="due-tag">due</span>');
+      if (!parts.length) return `<td class="chore-cell"></td>`;
+      return `<td class="chore-cell text-center"><div class="d-flex flex-column gap-1">${parts.join('')}</div></td>`;
     })
     .join('');
 }
@@ -331,8 +392,10 @@ async function openCellPicker(choreId, date) {
       '<div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Kids tab), then check off chores.</div>';
   } else {
     const doneMap = (state.weekGrid?.[Number(choreId)] || {})[date] || {};
+    const doneWeek = chore.frequency === 'due_by' ? doneThisWeek(chore) : null;
+    const isDone = (k) => (doneWeek ? doneWeek.has(k.id) : !!doneMap[k.id]);
     const mine = myKidId();
-    const available = state.kids.filter((k) => !doneMap[k.id] && (mine === null || k.id === mine));
+    const available = state.kids.filter((k) => !isDone(k) && (mine === null || k.id === mine));
     $('#cellModalBody').innerHTML = available.length
       ? `<div class="vstack gap-2">${available
           .map(
@@ -367,17 +430,23 @@ function renderTodaySummary() {
   const dow = new Date().getDay();
   const grid = state.weekGrid || {};
   const due = state.chores.filter((c) => c.active !== false && choreIsDueOn(c, dow));
-  if (!due.length) {
+  const dueBy = state.chores.filter((c) => c.active !== false && c.frequency === 'due_by');
+  if (!due.length && !dueBy.length) {
     el.innerHTML = '<span class="today-chip" style="--kid-color:#6b7280">🎉 Nothing due today — enjoy the free day!</span>';
     return;
   }
   el.innerHTML = state.kids
     .map((k) => {
-      const done = due.filter((c) => (grid[c.id] || {})[today]?.[k.id]).length;
-      const allDone = done === due.length;
+      // A due_by chore stays on the list until done, then counts only on the day it was
+      // done, so a Saturday laundry doesn't inflate Sunday's count.
+      const byDone = dueBy.map((c) => doneThisWeek(c).get(k.id));
+      const byCount = byDone.filter((d) => !d || d.date === today);
+      const total = due.length + byCount.length;
+      const done = due.filter((c) => (grid[c.id] || {})[today]?.[k.id]).length + byCount.filter(Boolean).length;
+      const allDone = done === total;
       return `<span class="today-chip ${allDone ? 'done' : ''}" style="--kid-color:${esc(k.color)}">
         <span class="today-dot-kid"></span>${esc(k.emoji)} ${esc(k.name)}
-        <span class="today-chip-count">${done}/${due.length}</span>
+        <span class="today-chip-count">${done}/${total}</span>
         ${allDone ? '<i class="bi bi-check-lg"></i>' : ''}
       </span>`;
     })

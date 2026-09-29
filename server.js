@@ -43,7 +43,7 @@ db.exec(`
     title       TEXT NOT NULL,
     points      INTEGER NOT NULL DEFAULT 1,
     frequency   TEXT NOT NULL DEFAULT 'weekly'
-                CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays')),
+                CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays', 'due_by')),
     days        TEXT, -- comma-separated day-of-week ints (0=Sun..6=Sat), e.g. '1,4'
     active      INTEGER NOT NULL DEFAULT 1
   );
@@ -89,7 +89,7 @@ function tableSql(name) {
 
 function migrate() {
   const choresSql = tableSql('chores');
-  if (choresSql && !/CHECK \(frequency IN \('daily', 'weekly', 'personal', 'schooldays'\)\)/.test(choresSql)) {
+  if (choresSql && !/'schooldays'/.test(choresSql)) {
     // Rebuilding a table needs FKs off. Both pragmas are no-ops inside a transaction,
     // so they sit outside the statements below and are restored afterwards to match the
     // startup state (foreign_keys ON). legacy_alter_table keeps `completions` pointing at
@@ -145,6 +145,32 @@ function migrate() {
       PRAGMA foreign_keys = ON;
     `);
     console.log('migrated: chores now support multiple days per week');
+  }
+
+  const choresSql3 = tableSql('chores');
+  if (choresSql3 && !/'due_by'/.test(choresSql3)) {
+    // Widen the CHECK for 'due_by' (each kid, once a week, by a deadline day).
+    // Same rebuild dance as above; by now the table always has `days`.
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = ON;
+      ALTER TABLE chores RENAME TO chores_old;
+      CREATE TABLE chores (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL,
+        points      INTEGER NOT NULL DEFAULT 1,
+        frequency   TEXT NOT NULL DEFAULT 'weekly'
+                    CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays', 'due_by')),
+        days        TEXT,
+        active      INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO chores (id, title, points, frequency, days, active)
+        SELECT id, title, points, frequency, days, active FROM chores_old;
+      DROP TABLE chores_old;
+      PRAGMA legacy_alter_table = OFF;
+      PRAGMA foreign_keys = ON;
+    `);
+    console.log('migrated: chores now support due-by-day weekly chores');
   }
 
   const compSql = tableSql('completions');
@@ -414,6 +440,17 @@ function todayStr() {
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+// First and last date (YYYY-MM-DD) of the chart week containing `date`.
+function weekBounds(date, startDay = 1) {
+  const d = new Date(date + 'T00:00:00');
+  d.setDate(d.getDate() - ((d.getDay() - startDay + 7) % 7));
+  const end = new Date(d);
+  end.setDate(d.getDate() + 6);
+  const p = (n) => String(n).padStart(2, '0');
+  const fmt = (x) => `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`;
+  return [fmt(d), fmt(end)];
+}
+
 function weekDates(offset = 0, startDay = 1) {
   // Week starts on `startDay` (0=Sunday..6=Saturday), offset by whole weeks
   // (negative = past, positive = future).
@@ -661,6 +698,8 @@ app.get('/api/chores', (req, res) => {
   res.json(chores.map((c) => ({ ...c, doneToday: doneToday.get(c.id) || 0 })));
 });
 
+const FREQUENCIES = ['daily', 'weekly', 'personal', 'schooldays', 'due_by'];
+
 function parseDays(str) {
   return str ? str.split(',').map(Number) : null;
 }
@@ -673,19 +712,21 @@ function encodeDays(days) {
 // left empty; 'daily'/'schooldays' ignore whatever days are stored, so they're
 // cleared to avoid a stale value lingering after a frequency change. 'personal'
 // may have specific days or none at all (none = every day, for that kid).
+// 'due_by' has exactly one day, the deadline; it defaults to the week's last day.
 function normalizeChoreDays(freq, days) {
   if (freq === 'daily' || freq === 'schooldays') return null;
   const clean = Array.isArray(days)
     ? [...new Set(days.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a, b) => a - b)
     : [];
   if (freq === 'weekly') return clean.length ? clean : [1];
+  if (freq === 'due_by') return [clean.length ? clean[0] : (loadSettings().weekStartDay + 6) % 7];
   return clean.length ? clean : null;
 }
 
 app.post('/api/chores', requireAdmin, (req, res) => {
   const { title, points, frequency, days } = req.body || {};
   if (!title || !String(title).trim()) return sendError(res, 400, 'Title is required');
-  const freq = ['daily', 'weekly', 'personal', 'schooldays'].includes(frequency) ? frequency : 'weekly';
+  const freq = FREQUENCIES.includes(frequency) ? frequency : 'weekly';
   const normalizedDays = normalizeChoreDays(freq, days);
   const pts = Number.isInteger(Number(points)) && Number(points) > 0 ? Number(points) : 1;
   try {
@@ -708,7 +749,7 @@ app.put('/api/chores/:id', requireAdmin, (req, res) => {
       ? Number(req.body.points)
       : chore.points;
   const frequency =
-    ['daily', 'weekly', 'personal', 'schooldays'].includes(req.body.frequency)
+    FREQUENCIES.includes(req.body.frequency)
       ? req.body.frequency
       : chore.frequency;
   const days = req.body.days !== undefined ? req.body.days : parseDays(chore.days);
@@ -761,6 +802,14 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
   const kid = prepare('SELECT * FROM kids WHERE id = ?').get(kidId);
   if (!kid) return sendError(res, 404, 'Kid not found');
   const doneDate = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : todayStr();
+  if (chore.frequency === 'due_by') {
+    // Once per kid per chart week, on any day; the UNIQUE index only covers one day.
+    const [from, to] = weekBounds(doneDate, loadSettings().weekStartDay);
+    const already = prepare(
+      'SELECT 1 FROM completions WHERE chore_id = ? AND kid_id = ? AND done_date BETWEEN ? AND ?'
+    ).get(chore.id, kid.id, from, to);
+    if (already) return sendError(res, 409, 'Already done this week — undo it first');
+  }
   try {
     const info = prepare(
       `INSERT INTO completions (chore_id, kid_id, done_date, points) VALUES (?, ?, ?, ?)`

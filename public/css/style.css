@@ -240,6 +240,28 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   margin-right: 4px;
 }
 
+/* due_by chores: past the deadline and not everyone's done */
+.chore-cell .cell-btn.overdue {
+  border-color: #d9a441;
+  background: #fff4dc;
+  color: #8a5a00;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chore-cell .cell-btn.overdue:hover {
+  border-color: #b7831f;
+  background: #ffe9b8;
+}
+
+.chore-cell .due-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+}
+
 /* Kids */
 .kid-avatar {
   width: 44px;
@@ -462,6 +484,12 @@ body[data-bs-theme="dark"] {
 [data-bs-theme="dark"] .chore-cell .cell-btn:hover {
   border-color: var(--kd-primary-light);
   background: #2f2650;
+}
+
+[data-bs-theme="dark"] .chore-cell .cell-btn.overdue {
+  border-color: #b7831f;
+  background: #3a2c0c;
+  color: #ffd27a;
 }
 
 [data-bs-theme="dark"] .pick-kid-btn {
