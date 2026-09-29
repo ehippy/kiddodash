@@ -44,7 +44,7 @@ db.exec(`
     points      INTEGER NOT NULL DEFAULT 1,
     frequency   TEXT NOT NULL DEFAULT 'weekly'
                 CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays')),
-    day_of_week INTEGER,
+    days        TEXT, -- comma-separated day-of-week ints (0=Sun..6=Sat), e.g. '1,4'
     active      INTEGER NOT NULL DEFAULT 1
   );
 
@@ -69,6 +69,13 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_redemptions_kid ON redemptions(kid_id);
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token   TEXT PRIMARY KEY,
+    role    TEXT NOT NULL,
+    kid_id  INTEGER,
+    expires INTEGER NOT NULL
+  );
 `);
 
 // ---------------------------------------------------------------------------
@@ -108,6 +115,36 @@ function migrate() {
       PRAGMA foreign_keys = ON;
     `);
     console.log('migrated: chores now supports personal frequency');
+  }
+
+  const choresSql2 = tableSql('chores');
+  if (choresSql2 && /day_of_week/.test(choresSql2) && !/\bdays\b/.test(choresSql2)) {
+    // Same rebuild dance as above: day_of_week (one day) becomes days (a
+    // comma-separated set), so a chore like "water the plants" can run on
+    // more than one day without being duplicated into separate rows.
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = ON;
+      ALTER TABLE chores RENAME TO chores_old;
+      CREATE TABLE chores (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL,
+        points      INTEGER NOT NULL DEFAULT 1,
+        frequency   TEXT NOT NULL DEFAULT 'weekly'
+                    CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays')),
+        days        TEXT,
+        active      INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO chores (id, title, points, frequency, days, active)
+        SELECT id, title, points, frequency,
+               CASE WHEN day_of_week IS NULL THEN NULL ELSE CAST(day_of_week AS TEXT) END,
+               active
+          FROM chores_old;
+      DROP TABLE chores_old;
+      PRAGMA legacy_alter_table = OFF;
+      PRAGMA foreign_keys = ON;
+    `);
+    console.log('migrated: chores now support multiple days per week');
   }
 
   const compSql = tableSql('completions');
@@ -175,6 +212,7 @@ migrate();
 
 const DEFAULT_SETTINGS = {
   pointsPerCompletion: 1,
+  weekStartDay: 1, // 0=Sunday .. 6=Saturday; default Monday
   rewards: [
     { id: 1, label: 'Pick the dinner menu', points: 10 },
     { id: 2, label: 'Extra 30 min screen time', points: 15 },
@@ -302,14 +340,17 @@ function bootstrapPinsFromEnv() {
   }
 }
 
-// In-memory sessions: token -> { role, kidId, expires }. Restart signs everyone
-// out, which is fine for a LAN chore chart and keeps PINs out of long-lived state.
+// Sessions live in SQLite (not an in-memory Map) so a server restart — an app
+// update, a Pi reboot — doesn't sign everyone out; they already carry a 30-day
+// expiry, so this just lets that expiry actually mean something.
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const sessions = new Map();
 
 function createSession(session) {
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, { ...session, expires: Date.now() + SESSION_TTL_MS });
+  prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now()); // lazy prune
+  prepare('INSERT INTO sessions (token, role, kid_id, expires) VALUES (?, ?, ?, ?)').run(
+    token, session.role, session.kidId ?? null, Date.now() + SESSION_TTL_MS
+  );
   return token;
 }
 
@@ -322,18 +363,17 @@ function getSession(req) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
-  const session = sessions.get(token);
-  if (!session) return null;
-  if (session.expires < Date.now()) {
-    sessions.delete(token);
+  const row = prepare('SELECT * FROM sessions WHERE token = ?').get(token);
+  if (!row) return null;
+  if (row.expires < Date.now()) {
+    prepare('DELETE FROM sessions WHERE token = ?').run(token);
     return null;
   }
-  session.token = token;
-  return session;
+  return { role: row.role, kidId: row.kid_id, token };
 }
 
 function dropSession(token) {
-  sessions.delete(token);
+  prepare('DELETE FROM sessions WHERE token = ?').run(token);
 }
 
 // Brute-force guard: 10 failed PIN attempts per source IP per 10 minutes.
@@ -374,20 +414,21 @@ function todayStr() {
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function weekDates(offset = 0) {
-  // Monday-start week, offset by whole weeks (negative = past, positive = future)
+function weekDates(offset = 0, startDay = 1) {
+  // Week starts on `startDay` (0=Sunday..6=Saturday), offset by whole weeks
+  // (negative = past, positive = future).
   const now = new Date();
-  const jsDay = (now.getDay() + 6) % 7; // 0 = Monday
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - jsDay + offset * 7);
+  const jsDay = (now.getDay() - startDay + 7) % 7;
+  const start = new Date(now);
+  start.setDate(now.getDate() - jsDay + offset * 7);
   return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
     const p = (n) => String(n).padStart(2, '0');
     return {
       date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
-      day: DAYS[(i + 1) % 7],
-      weekdayIndex: (i + 1) % 7
+      day: DAYS[d.getDay()],
+      weekdayIndex: d.getDay()
     };
   });
 }
@@ -502,17 +543,27 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-// --- PIN management (admin only) ----------------------------------------------
+// --- PIN management (admin, or a kid changing their own) ---------------------
 
-// PUT /api/kids/:id/pin  { pin }  — pin null/empty removes the kid's PIN
-app.put('/api/kids/:id/pin', requireAdmin, (req, res) => {
+// PUT /api/kids/:id/pin  { pin, currentPin? }  — pin null/empty removes the kid's
+// PIN (admin only). A kid changing their own PIN must also pass their current one;
+// removal is admin-only so a kid can't lock themselves out of self-service sign-in.
+app.put('/api/kids/:id/pin', requireAdminOrSelf((req) => Number(req.params.id)), (req, res) => {
   const kid = prepare('SELECT * FROM kids WHERE id = ?').get(req.params.id);
   if (!kid) return sendError(res, 404, 'Kid not found');
+  const isSelf = getSession(req)?.role === 'kid';
+
   const raw = req.body?.pin;
   if (raw === null || raw === undefined || String(raw).trim() === '') {
+    if (isSelf) return sendError(res, 403, 'Ask a parent to remove your PIN');
     setKidPin(kid.id, null);
     return res.json({ ok: true, pinSet: false });
   }
+
+  if (isSelf && !verifyPin(String(req.body?.currentPin || '').trim(), kid.pin_salt, kid.pin_hash)) {
+    return sendError(res, 403, 'Current PIN is incorrect');
+  }
+
   const pin = String(raw).trim();
   if (!KID_PIN_RE.test(pin)) return sendError(res, 400, 'Kid PIN must be exactly 4 digits');
   try {
@@ -600,7 +651,7 @@ app.delete('/api/kids/:id', requireAdmin, (req, res) => {
 // --- Chores --------------------------------------------------------------------
 
 app.get('/api/chores', (req, res) => {
-  const chores = prepare('SELECT * FROM chores ORDER BY frequency, day_of_week, id').all();
+  const chores = prepare('SELECT * FROM chores ORDER BY frequency, days, id').all();
   const doneToday = new Map(
     prepare(
       `SELECT c.chore_id, COUNT(*) AS n FROM completions c
@@ -610,17 +661,37 @@ app.get('/api/chores', (req, res) => {
   res.json(chores.map((c) => ({ ...c, doneToday: doneToday.get(c.id) || 0 })));
 });
 
+function parseDays(str) {
+  return str ? str.split(',').map(Number) : null;
+}
+
+function encodeDays(days) {
+  return days && days.length ? days.join(',') : null;
+}
+
+// A 'weekly' chore needs at least one day to ever come due, so days can't be
+// left empty; 'daily'/'schooldays' ignore whatever days are stored, so they're
+// cleared to avoid a stale value lingering after a frequency change. 'personal'
+// may have specific days or none at all (none = every day, for that kid).
+function normalizeChoreDays(freq, days) {
+  if (freq === 'daily' || freq === 'schooldays') return null;
+  const clean = Array.isArray(days)
+    ? [...new Set(days.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a, b) => a - b)
+    : [];
+  if (freq === 'weekly') return clean.length ? clean : [1];
+  return clean.length ? clean : null;
+}
+
 app.post('/api/chores', requireAdmin, (req, res) => {
-  const { title, points, frequency, dayOfWeek } = req.body || {};
+  const { title, points, frequency, days } = req.body || {};
   if (!title || !String(title).trim()) return sendError(res, 400, 'Title is required');
   const freq = ['daily', 'weekly', 'personal', 'schooldays'].includes(frequency) ? frequency : 'weekly';
-  let dow = dayOfWeek == null ? null : Number(dayOfWeek);
-  if (dow < 0 || dow > 6) dow = null;
-  const pts = Number.isInteger(points) && points > 0 ? points : 1;
+  const normalizedDays = normalizeChoreDays(freq, days);
+  const pts = Number.isInteger(Number(points)) && Number(points) > 0 ? Number(points) : 1;
   try {
     const info = prepare(
-      `INSERT INTO chores (title, points, frequency, day_of_week) VALUES (?, ?, ?, ?)`
-    ).run(String(title).trim(), pts, freq, dow);
+      `INSERT INTO chores (title, points, frequency, days) VALUES (?, ?, ?, ?)`
+    ).run(String(title).trim(), pts, freq, encodeDays(normalizedDays));
     res.status(201).json(prepare('SELECT * FROM chores WHERE id = ?').get(info.lastInsertRowid));
   } catch (e) {
     sendError(res, 500, e.message);
@@ -633,25 +704,20 @@ app.put('/api/chores/:id', requireAdmin, (req, res) => {
   const title = req.body.title !== undefined ? String(req.body.title).trim() : chore.title;
   if (!title) return sendError(res, 400, 'Title cannot be empty');
   const points =
-    req.body.points !== undefined && Number.isInteger(req.body.points) && req.body.points > 0
-      ? req.body.points
+    req.body.points !== undefined && Number.isInteger(Number(req.body.points)) && Number(req.body.points) > 0
+      ? Number(req.body.points)
       : chore.points;
   const frequency =
     ['daily', 'weekly', 'personal', 'schooldays'].includes(req.body.frequency)
       ? req.body.frequency
       : chore.frequency;
-  let dow =
-    req.body.dayOfWeek !== undefined
-      ? req.body.dayOfWeek == null
-        ? null
-        : Number(req.body.dayOfWeek)
-      : chore.day_of_week;
-  if (dow !== null && (dow < 0 || dow > 6)) dow = null;
+  const days = req.body.days !== undefined ? req.body.days : parseDays(chore.days);
+  const normalizedDays = normalizeChoreDays(frequency, days);
   const active =
     req.body.active !== undefined ? (req.body.active ? 1 : 0) : chore.active;
 
-  prepare('UPDATE chores SET title = ?, points = ?, frequency = ?, day_of_week = ?, active = ? WHERE id = ?').run(
-    title, points, frequency, dow, active, chore.id
+  prepare('UPDATE chores SET title = ?, points = ?, frequency = ?, days = ?, active = ? WHERE id = ?').run(
+    title, points, frequency, encodeDays(normalizedDays), active, chore.id
   );
   res.json(prepare('SELECT * FROM chores WHERE id = ?').get(chore.id));
 });
@@ -734,8 +800,10 @@ app.get('/api/week', (req, res) => {
     ...publicKid(k),
     points: totals.get(k.id) || 0
   }));
-  const chores = prepare('SELECT * FROM chores WHERE active = 1 ORDER BY frequency, day_of_week, id').all();
-  const week = weekDates(offset);
+  // All chores (not just active ones) so the admin Chores list can still see and
+  // manage paused chores; the chart itself filters to active ones client-side.
+  const chores = prepare('SELECT * FROM chores ORDER BY frequency, days, id').all();
+  const week = weekDates(offset, loadSettings().weekStartDay);
   const dates = week.map((w) => w.date);
 
   const rows = prepare(
@@ -769,7 +837,8 @@ app.get('/api/week', (req, res) => {
       title: c.title,
       points: c.points,
       frequency: c.frequency,
-      dayOfWeek: c.day_of_week
+      days: parseDays(c.days),
+      active: !!c.active
     }))
   });
 });
@@ -878,6 +947,11 @@ app.put('/api/settings', requireAdmin, (req, res) => {
     next.rewards = body.rewards
       .filter((r) => r && String(r.label).trim())
       .map((r) => ({ id: Number(r.id) || Date.now(), label: String(r.label).trim(), points: Number(r.points) || 0 }));
+  }
+  if (body.weekStartDay !== undefined) {
+    const wsd = Number(body.weekStartDay);
+    if (!Number.isInteger(wsd) || wsd < 0 || wsd > 6) return sendError(res, 400, 'weekStartDay must be 0-6');
+    next.weekStartDay = wsd;
   }
   saveSettings(next);
   res.json(next);

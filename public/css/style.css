@@ -1,13 +1,151 @@
 /* KiddoDash custom styles (on top of Bootstrap 5) */
 
+/* ============ Palette: kid-friendly pastel, but still AA-contrast ============
+   Buttons/text/badges need real contrast against white, so the "brand" shades
+   below read as saturated candy tones rather than washed-out pastel — the true
+   pastels live in backgrounds, gradients and chip fills instead, where they
+   pair with dark text or a theme-adaptive color and don't need to carry
+   contrast themselves. */
+:root {
+  --bs-primary: #7c5cd9;
+  --bs-primary-rgb: 124, 92, 217;
+  --bs-secondary: #75708f;
+  --bs-secondary-rgb: 117, 112, 143;
+  --bs-success: #257e59;
+  --bs-success-rgb: 37, 126, 89;
+  --bs-danger: #cc3355;
+  --bs-danger-rgb: 204, 51, 85;
+  --bs-info: #a9e4f5;
+  --bs-info-rgb: 169, 228, 245;
+  --bs-warning: #ffdd9e;
+  --bs-warning-rgb: 255, 221, 158;
+  --bs-link-color: #7c5cd9;
+  --bs-link-color-rgb: 124, 92, 217;
+  --bs-link-hover-color: #664bb2;
+  --bs-link-hover-color-rgb: 102, 75, 178;
+  --bs-border-radius: 0.55rem;
+  --bs-card-border-radius: 1rem;
+
+  --kd-primary-light: #a48bef; /* dark-mode accent: lighter for contrast on dark bg */
+}
+
 body {
   font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
-  background-color: #f8f9fa;
   min-height: 100vh;
+  background: linear-gradient(160deg, #f3f0ff 0%, #fafafa 45%, #fff4ea 100%);
 }
 
 h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   font-weight: 700;
+}
+
+/* Cards: soft rounded corners + a gentle tinted shadow instead of flat gray */
+.card {
+  border-color: rgba(124, 92, 217, 0.12);
+}
+
+.card.shadow-sm {
+  box-shadow: 0 2px 14px rgba(124, 92, 217, 0.1) !important;
+}
+
+/* Buttons/checkboxes/focus rings: Bootstrap bakes literal hex into these
+   per-component variables at build time rather than reading --bs-primary etc,
+   so each one needs its own override to pick up the new palette. */
+.btn-primary {
+  --bs-btn-bg: #7c5cd9;
+  --bs-btn-border-color: #7c5cd9;
+  --bs-btn-hover-bg: #7053c3;
+  --bs-btn-hover-border-color: #6a4bc4;
+  --bs-btn-active-bg: #664bb2;
+  --bs-btn-active-border-color: #5b3fae;
+  --bs-btn-disabled-bg: #7c5cd9;
+  --bs-btn-disabled-border-color: #7c5cd9;
+  --bs-btn-focus-shadow-rgb: 124, 92, 217;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: #7c5cd9;
+  --bs-btn-border-color: #7c5cd9;
+  --bs-btn-hover-bg: #7c5cd9;
+  --bs-btn-hover-border-color: #7c5cd9;
+  --bs-btn-active-bg: #664bb2;
+  --bs-btn-active-border-color: #5b3fae;
+  --bs-btn-disabled-color: #7c5cd9;
+  --bs-btn-disabled-border-color: #7c5cd9;
+  --bs-btn-focus-shadow-rgb: 124, 92, 217;
+}
+
+.btn-secondary {
+  --bs-btn-bg: #75708f;
+  --bs-btn-border-color: #75708f;
+  --bs-btn-hover-bg: #696581;
+  --bs-btn-hover-border-color: #625e79;
+  --bs-btn-active-bg: #605c75;
+  --bs-btn-active-border-color: #59556d;
+  --bs-btn-disabled-bg: #75708f;
+  --bs-btn-disabled-border-color: #75708f;
+  --bs-btn-focus-shadow-rgb: 117, 112, 143;
+}
+
+.btn-outline-secondary {
+  --bs-btn-color: #75708f;
+  --bs-btn-border-color: #a5a1b8;
+  --bs-btn-hover-bg: #75708f;
+  --bs-btn-hover-border-color: #75708f;
+  --bs-btn-active-bg: #696581;
+  --bs-btn-active-border-color: #625e79;
+  --bs-btn-disabled-color: #75708f;
+  --bs-btn-disabled-border-color: #a5a1b8;
+  --bs-btn-focus-shadow-rgb: 117, 112, 143;
+}
+
+.btn-danger {
+  --bs-btn-bg: #cc3355;
+  --bs-btn-border-color: #cc3355;
+  --bs-btn-hover-bg: #b82e4c;
+  --bs-btn-hover-border-color: #ad2b48;
+  --bs-btn-active-bg: #a72a46;
+  --bs-btn-active-border-color: #9c2742;
+  --bs-btn-disabled-bg: #cc3355;
+  --bs-btn-disabled-border-color: #cc3355;
+  --bs-btn-focus-shadow-rgb: 204, 51, 85;
+}
+
+.btn-outline-danger {
+  --bs-btn-color: #cc3355;
+  --bs-btn-border-color: #cc3355;
+  --bs-btn-hover-bg: #cc3355;
+  --bs-btn-hover-border-color: #cc3355;
+  --bs-btn-active-bg: #b82e4c;
+  --bs-btn-active-border-color: #ad2b48;
+  --bs-btn-disabled-color: #cc3355;
+  --bs-btn-disabled-border-color: #cc3355;
+  --bs-btn-focus-shadow-rgb: 204, 51, 85;
+}
+
+.nav-pills {
+  --bs-nav-pills-link-active-bg: #7c5cd9;
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: #b3a1ec;
+  box-shadow: 0 0 0 0.25rem rgba(124, 92, 217, 0.25);
+}
+
+.form-check-input:checked {
+  background-color: #7c5cd9;
+  border-color: #7c5cd9;
+}
+
+.form-check-input:focus {
+  border-color: #b3a1ec;
+  box-shadow: 0 0 0 0.25rem rgba(124, 92, 217, 0.25);
+}
+
+/* Navbar: soft violet-to-berry gradient instead of a flat corporate blue */
+.app-navbar {
+  background: linear-gradient(100deg, #7c5cd9 0%, #9b5cc7 100%);
 }
 
 /* Chore chart table */
@@ -31,7 +169,7 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
 }
 
 .chore-table thead th.today-col {
-  color: #0d6efd;
+  color: #7c5cd9;
 }
 
 .chore-table thead .today-dot {
@@ -39,7 +177,7 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #0d6efd;
+  background: #7c5cd9;
   margin-left: 4px;
 }
 
@@ -78,8 +216,8 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
 }
 
 .chore-cell .cell-btn:hover {
-  border-color: #0d6efd;
-  background: #e7f1ff;
+  border-color: #7c5cd9;
+  background: #efe9ff;
   transform: scale(1.04);
 }
 
@@ -138,7 +276,7 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--kid-color, #0d6efd);
+  background: var(--kid-color, #7c5cd9);
 }
 
 .today-chip .today-chip-count {
@@ -193,15 +331,25 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   font-size: 0.7rem;
 }
 
-.day-select {
-  width: 110px;
+.chore-days-picker {
+  flex-wrap: wrap;
 }
 
-/* Settings sub-tabs (secondary navigation) */
-.settings-subtabs .nav-link {
-  font-size: 0.9rem;
-  padding: 0.35rem 0.9rem;
-  font-weight: 700;
+.chore-days-picker .btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* Settings page: stacked sections instead of sub-tabs */
+.settings-section + .settings-section {
+  margin-top: 2.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--bs-border-color, #dee2e6);
+}
+
+.settings-section-title {
+  font-weight: 800;
+  margin-bottom: 1rem;
 }
 
 /* Rewards menu items */
@@ -228,11 +376,57 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   margin-bottom: 0.5rem;
 }
 
+/* ============ PIN login screen ============ */
+
+.login-backdrop {
+  background: linear-gradient(160deg, #f3f0ff 0%, #fafafa 45%, #fff4ea 100%);
+}
+
+.login-card {
+  width: min(340px, 92vw);
+  background: var(--bs-card-bg, #fff);
+  border-radius: 20px;
+  padding: 1.75rem 1.5rem;
+  box-shadow: 0 12px 32px rgba(124, 92, 217, 0.16);
+  animation: login-card-in 0.25s ease;
+}
+
+.login-card.shake {
+  animation: login-shake 0.4s ease;
+}
+
+.login-logo {
+  font-size: 2.5rem;
+  line-height: 1;
+  margin-bottom: 0.35rem;
+}
+
+.login-title {
+  font-weight: 800;
+}
+
+.login-pin-input {
+  letter-spacing: 0.5em;
+  font-weight: 700;
+}
+
+@keyframes login-card-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes login-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-6px); }
+  40%, 60% { transform: translateX(6px); }
+}
+
 /* ============ Dark mode (on top of data-bs-theme="dark") ============ */
 
 [data-bs-theme="dark"] body,
 body[data-bs-theme="dark"] {
-  background-color: #111827 !important;
+  background: linear-gradient(160deg, #1a1730 0%, #111827 50%, #1b2032 100%) !important;
 }
 
 [data-bs-theme="dark"] .card {
@@ -253,11 +447,11 @@ body[data-bs-theme="dark"] {
 }
 
 [data-bs-theme="dark"] .chore-table thead .today-dot {
-  background: #60a5fa;
+  background: var(--kd-primary-light);
 }
 
 [data-bs-theme="dark"] .chore-table thead th.today-col {
-  color: #60a5fa;
+  color: var(--kd-primary-light);
 }
 
 [data-bs-theme="dark"] .chore-cell .cell-btn {
@@ -266,8 +460,8 @@ body[data-bs-theme="dark"] {
 }
 
 [data-bs-theme="dark"] .chore-cell .cell-btn:hover {
-  border-color: #60a5fa;
-  background: #1e3a5f;
+  border-color: var(--kd-primary-light);
+  background: #2f2650;
 }
 
 [data-bs-theme="dark"] .pick-kid-btn {
@@ -319,3 +513,13 @@ body[data-bs-theme="dark"] {
 [data-bs-theme="dark"] footer {
   color: #6b7280;
 }
+
+[data-bs-theme="dark"] .login-backdrop {
+  background: linear-gradient(160deg, #111827 0%, #1f2937 55%, #1e293b 100%);
+}
+
+[data-bs-theme="dark"] .login-card {
+  background: #1f2937;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+

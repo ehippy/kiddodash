@@ -65,19 +65,73 @@ function dateStr(d) {
 }
 
 function weekDates(offset) {
+  const startDay = state.settings?.weekStartDay ?? 1;
   const now = new Date();
-  const jsDay = (now.getDay() + 6) % 7; // 0 = Monday
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - jsDay + offset * 7);
+  const jsDay = (now.getDay() - startDay + 7) % 7;
+  const start = new Date(now);
+  start.setDate(now.getDate() - jsDay + offset * 7);
   return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
     return d;
   });
 }
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAYS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Mon..Sun
+
+function sortByWeekOrder(days) {
+  return [...days].sort((a, b) => WEEK_ORDER.indexOf(a) - WEEK_ORDER.indexOf(b));
+}
+
+// Single source of truth for "is this chore due on this weekday" — used by both
+// the chart and the today-summary chips, so they can't drift apart.
+function choreIsDueOn(chore, dow) {
+  if (chore.frequency === 'daily') return true;
+  if (chore.frequency === 'schooldays') return dow >= 1 && dow <= 5;
+  if (chore.frequency === 'personal') return !chore.days || !chore.days.length || chore.days.includes(dow);
+  if (chore.frequency === 'weekly') return !!chore.days && chore.days.includes(dow);
+  return false;
+}
+
+function freqBadgeHtml(chore) {
+  if (chore.frequency === 'daily') return '<span class="badge text-bg-info freq-badge">daily</span>';
+  if (chore.frequency === 'schooldays') return '<span class="badge text-bg-info freq-badge">each kid, school nights</span>';
+  const daysLabel = chore.days && chore.days.length
+    ? sortByWeekOrder(chore.days).map((d) => DAY_NAMES[d]).join(', ')
+    : null;
+  if (chore.frequency === 'personal') {
+    return `<span class="badge text-bg-primary freq-badge">each kid, ${daysLabel || 'daily'}</span>`;
+  }
+  return `<span class="badge text-bg-secondary freq-badge">${daysLabel}</span>`;
+}
+
+// Multi-day picker: weekly needs at least one day picked (enforced server-side
+// too), personal can mean every day (none picked) or specific days, daily/
+// schooldays have no day concept at all. Shared by the add-chore form and the
+// edit modal via a distinct `idPrefix` so their checkbox ids never collide.
+function renderChoreDaysPicker(container, idPrefix, freq, selectedDays) {
+  if (freq === 'daily' || freq === 'schooldays') {
+    container.innerHTML = '';
+    return;
+  }
+  const selected = new Set(selectedDays || []);
+  container.innerHTML = `
+    <div class="btn-group btn-group-sm chore-days-picker" role="group">
+      ${WEEK_ORDER.map((d) => {
+        const id = `${idPrefix}-${d}`;
+        return `<input type="checkbox" class="btn-check" id="${id}" value="${d}" autocomplete="off"${selected.has(d) ? ' checked' : ''}>
+                <label class="btn btn-outline-secondary" for="${id}">${DAY_NAMES[d]}</label>`;
+      }).join('')}
+    </div>
+    ${freq === 'personal' ? '<div class="form-text">No days picked = every day</div>' : ''}
+  `;
+}
+
+function readChoreDaysPicker(container) {
+  return Array.from(container.querySelectorAll('input:checked')).map((el) => Number(el.value));
+}
 
 /* ============================ Auth ============================ */
 
@@ -94,8 +148,7 @@ function applyRoleUI() {
   const kid = myKidId();
   // Admin-only tabs
   $('#tab-settings').classList.toggle('d-none', !admin);
-  $('#tab-sub-access').closest('.nav-item').classList.toggle('d-none', !admin);
-  // Anything marked admin-only (reward edit/delete, Access pill)
+  // Anything marked admin-only (reward edit/delete)
   document.querySelectorAll('[data-admin-only]').forEach((el) => {
     el.classList.toggle('d-none', !admin);
   });
@@ -107,20 +160,38 @@ function applyRoleUI() {
   // Nav identity
   const badge = $('#whoBadge');
   const signOut = $('#btnSignOut');
+  const myPin = $('#btnMyPin');
   if (state.session) {
     badge.classList.remove('d-none');
     signOut.classList.remove('d-none');
     if (state.session.role === 'admin') {
       badge.textContent = '👑 Admin';
       badge.className = 'badge text-bg-warning';
+      myPin.classList.add('d-none');
     } else {
       badge.textContent = `${state.session.kid.emoji} ${state.session.kid.name}`;
       badge.style.background = state.session.kid.color;
       badge.className = 'badge text-light';
+      myPin.classList.remove('d-none');
     }
   } else {
     badge.classList.add('d-none');
     signOut.classList.add('d-none');
+    myPin.classList.add('d-none');
+  }
+}
+
+let pinAutoSubmitTimer = null;
+
+function onPinChanged() {
+  clearTimeout(pinAutoSubmitTimer);
+  const len = $('#loginPin').value.length;
+  if (len === 8) {
+    $('#loginForm').requestSubmit();
+  } else if (len >= 4) {
+    // Kid PINs are exactly 4 digits; admin PINs run 4-8. Give a brief pause
+    // in case more digits are coming before auto-submitting.
+    pinAutoSubmitTimer = setTimeout(() => $('#loginForm').requestSubmit(), 450);
   }
 }
 
@@ -147,6 +218,7 @@ async function doLogin(pin) {
   showLogin(false);
   $('#loginPin').value = '';
   $('#loginError').classList.add('d-none');
+  clearTimeout(pinAutoSubmitTimer);
   await Promise.all([refreshWeek(), refreshRewards()]);
 }
 
@@ -174,10 +246,12 @@ function loadWeek() {
         ? `${-state.weekOffset} week${-state.weekOffset > 1 ? 's' : ''} ago`
         : `In ${state.weekOffset} week${state.weekOffset > 1 ? 's' : ''}`;
 
-  // Rows
+  // Rows — paused chores stay visible in the Chores tab for editing, but never
+  // show up on the family's chart.
   const body = $('#chartBody');
   const grid = state.weekGrid || {};
-  if (!state.chores.length) {
+  const activeChores = state.chores.filter((c) => c.active);
+  if (!activeChores.length) {
     body.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="bi bi-clipboard2-x"></i>No chores yet — add some in the “Chores” tab.</td></tr>`;
     return;
   }
@@ -185,22 +259,18 @@ function loadWeek() {
     body.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="bi bi-people"></i>Add a kid first (Kids tab), then check off chores.</td></tr>`;
     return;
   }
-  body.innerHTML = state.chores
+  body.innerHTML = activeChores
     .map((chore) => {
       const cells = dates
         .map((d) => {
           const ds = dateStr(d);
-          const isDue =
-            chore.frequency === 'daily' ||
-            (chore.frequency === 'schooldays' && d.getDay() >= 1 && d.getDay() <= 5) ||
-            (chore.frequency === 'personal' &&
-              (chore.dayOfWeek == null || chore.dayOfWeek === d.getDay())) ||
-            (chore.frequency === 'weekly' && chore.dayOfWeek === d.getDay());
+          const isDue = choreIsDueOn(chore, d.getDay());
           const doneMap = (grid[chore.id] || {})[ds];
           const due = isDue;
           const doneKids = state.kids.filter((k) => doneMap && doneMap[k.id]);
-          const remaining =
-            due && (chore.frequency === 'personal' ? state.kids.length - doneKids.length : doneMap ? 0 : 1);
+          // personal and schooldays chores are done once per kid; the rest are shared
+          const perKid = chore.frequency === 'personal' || chore.frequency === 'schooldays';
+          const remaining = due && (perKid ? state.kids.length - doneKids.length : doneMap ? 0 : 1);
           const parts = [];
           for (const k of doneKids) {
             const c = doneMap[k.id];
@@ -213,7 +283,7 @@ function loadWeek() {
           }
           if (remaining > 0 && (isAdmin() || myKidId() !== null)) {
             const hint =
-              chore.frequency === 'personal'
+              perKid
                 ? `${esc(chore.title)} — ${remaining} kid${remaining > 1 ? 's' : ''} to go`
                 : 'Check off';
             parts.push(`<button class="cell-btn" data-chore="${chore.id}" data-date="${ds}" title="${hint}">✎</button>`);
@@ -223,16 +293,8 @@ function loadWeek() {
           return `<td class="chore-cell text-center"><div class="d-flex flex-column gap-1">${parts.join('')}</div></td>`;
         })
         .join('');
-      const freqBadge =
-        chore.frequency === 'daily'
-          ? '<span class="badge text-bg-info freq-badge">daily</span>'
-          : chore.frequency === 'schooldays'
-            ? '<span class="badge text-bg-info freq-badge">school nights</span>'
-            : chore.frequency === 'personal'
-            ? `<span class="badge text-bg-primary freq-badge">each kid, ${chore.dayOfWeek == null ? 'daily' : DAYS_FULL[chore.dayOfWeek]}</span>`
-            : `<span class="badge text-bg-secondary freq-badge">${DAYS_FULL[chore.dayOfWeek]}</span>`;
       return `<tr>
-        <td class="chore-title-cell ps-2">${esc(chore.title)}<span class="chore-pts">${chore.points} pt${chore.points > 1 ? 's' : ''}</span>${freqBadge}</td>
+        <td class="chore-title-cell ps-2">${esc(chore.title)}<span class="chore-pts">${chore.points} pt${chore.points > 1 ? 's' : ''}</span>${freqBadgeHtml(chore)}</td>
         ${cells}
       </tr>`;
     })
@@ -254,6 +316,7 @@ async function refreshWeek() {
   loadWeek();
   loadKidsTab();
   loadChoresTab();
+  loadAccessTab(); // Settings is one scrolling page now — keep every section in sync
   applyRoleUI(); // re-apply after re-render (chart buttons depend on role)
 }
 
@@ -303,14 +366,7 @@ function renderTodaySummary() {
   const today = dateStr(new Date());
   const dow = new Date().getDay();
   const grid = state.weekGrid || {};
-  const due = state.chores.filter(
-    (c) =>
-      c.active !== false &&
-      (c.frequency === 'daily' ||
-        (c.frequency === 'schooldays' && dow >= 1 && dow <= 5) ||
-        (c.frequency === 'personal' && (c.dayOfWeek == null || c.dayOfWeek === dow)) ||
-        (c.frequency === 'weekly' && c.dayOfWeek === dow))
-  );
+  const due = state.chores.filter((c) => c.active !== false && choreIsDueOn(c, dow));
   if (!due.length) {
     el.innerHTML = '<span class="today-chip" style="--kid-color:#6b7280">🎉 Nothing due today — enjoy the free day!</span>';
     return;
@@ -353,11 +409,7 @@ function loadKidsTab() {
             </div>
           </div>
           <div class="btn-group btn-group-sm">
-            <input type="color" class="form-control form-control-color btn border-end-0" style="width:38px"
-                   value="${esc(k.color)}" data-recolor="${k.id}" title="Change color">
-            <input class="form-control form-control-sm w-auto" style="width:44px;text-align:center" maxlength="4"
-                   value="${esc(k.emoji)}" data-reemoji="${k.id}" title="Change emoji">
-            <button class="btn btn-outline-secondary" data-rename="${k.id}" title="Rename"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-outline-secondary" data-editkid="${k.id}" title="Edit"><i class="bi bi-pencil"></i></button>
             <button class="btn btn-outline-danger" data-delkid="${k.id}" title="Remove"><i class="bi bi-trash"></i></button>
           </div>
         </div>
@@ -385,7 +437,7 @@ function loadAccessTab() {
           <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
           <span class="fw-bold flex-grow-1">${esc(k.name)}</span>
           <span class="badge ${k.hasPin ? 'text-bg-success' : 'text-bg-secondary'}">${k.hasPin ? 'PIN set' : 'no PIN'}</span>
-          <button class="btn btn-sm btn-outline-primary" data-kidpin="${k.id}">
+          <button class="btn btn-sm btn-outline-primary" data-editkid="${k.id}">
             <i class="bi bi-key me-1"></i>${k.hasPin ? 'Change' : 'Set PIN'}
           </button>
         </div>
@@ -411,24 +463,8 @@ function loadChoresTab() {
           </div>
           <span class="fw-bold flex-grow-1 ${c.active ? '' : 'text-muted'}">${esc(c.title)}</span>
           <span class="chore-pts">${c.points} pt${c.points > 1 ? 's' : ''}</span>
-          ${
-            c.frequency === 'weekly'
-              ? `<select class="form-select form-select-sm day-select" data-changeday="${c.id}">
-                  ${[1, 2, 3, 4, 5, 6, 0]
-                    .map((d) => `<option value="${d}" ${c.dayOfWeek === d ? 'selected' : ''}>${DAYS_FULL[d]}</option>`)
-                    .join('')}
-                </select>`
-              : c.frequency === 'schooldays'
-                ? '<span class="badge text-bg-info freq-badge">each kid, school nights</span>'
-                : c.frequency === 'daily'
-                  ? '<span class="badge text-bg-info freq-badge">daily</span>'
-                  : `<span class="badge text-bg-primary freq-badge">each kid${c.dayOfWeek == null ? ', daily' : ''}</span>
-                  <select class="form-select form-select-sm day-select" data-changeday="${c.id}">
-                  ${['', 1, 2, 3, 4, 5, 6, 0]
-                    .map((d) => `<option value="${d}" ${String(c.dayOfWeek ?? '') === String(d) ? 'selected' : ''}>${d === '' ? 'Every day' : DAYS_FULL[d]}</option>`)
-                    .join('')}
-                </select>`
-          }
+          ${freqBadgeHtml(c)}
+          <button class="btn btn-sm btn-outline-secondary" data-editchore="${c.id}" title="Edit"><i class="bi bi-pencil"></i></button>
           <button class="btn btn-sm btn-outline-danger" data-delchore="${c.id}" title="Delete"><i class="bi bi-trash"></i></button>
         </div>
       </li>`
@@ -613,43 +649,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       return;
     }
-    const rename = e.target.closest('[data-rename]');
-    if (rename) {
-      const kid = state.kids.find((k) => k.id === Number(rename.dataset.rename));
-      const name = prompt('New name:', kid?.name);
-      if (name && name.trim() && name.trim() !== kid.name) {
-        try {
-          await api('/api/kids/' + kid.id, { method: 'PUT', body: { name: name.trim() } });
-          await refreshWeek();
-        } catch (err) { toast(err.message, 'danger'); }
-      }
-    }
-  });
-
-  $('#kidsList').addEventListener('change', async (e) => {
-    const recolor = e.target.closest('[data-recolor]');
-    if (recolor) {
-      const kid = state.kids.find((k) => k.id === Number(recolor.dataset.recolor));
-      try {
-        await api('/api/kids/' + kid.id, { method: 'PUT', body: { color: recolor.value } });
-        await refreshWeek();
-      } catch (err) { toast(err.message, 'danger'); }
-      return;
-    }
-    const reemoji = e.target.closest('[data-reemoji]');
-    if (reemoji && reemoji.value.trim()) {
-      const kid = state.kids.find((k) => k.id === Number(reemoji.dataset.reemoji));
-      try {
-        await api('/api/kids/' + kid.id, { method: 'PUT', body: { emoji: reemoji.value.trim() } });
-        await refreshWeek();
-      } catch (err) { toast(err.message, 'danger'); }
-    }
+    const edit = e.target.closest('[data-editkid]');
+    if (edit) openKidEditModal(Number(edit.dataset.editkid));
   });
 
   // Chores form
+  renderChoreDaysPicker($('#choreDaysRow'), 'choreDay', $('#choreFreq').value, []);
   $('#choreFreq').addEventListener('change', (e) => {
-    // daily: no day. schooldays: fixed Mon-Fri. weekly/personal: day picker applies.
-    $('#choreDay').disabled = e.target.value === 'daily' || e.target.value === 'schooldays';
+    const kept = readChoreDaysPicker($('#choreDaysRow'));
+    renderChoreDaysPicker($('#choreDaysRow'), 'choreDay', e.target.value, kept);
   });
   $('#choreForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -659,12 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
         body: {
           title: $('#choreTitle').value.trim(),
           frequency: $('#choreFreq').value,
-          dayOfWeek:
-            $('#choreFreq').value === 'daily' || $('#choreFreq').value === 'schooldays'
-              ? null
-              : $('#choreDay').value === ''
-                ? null
-                : Number($('#choreDay').value),
+          days: readChoreDaysPicker($('#choreDaysRow')),
           points: Number($('#chorePoints').value) || 1,
         },
       });
@@ -687,18 +690,13 @@ document.addEventListener('DOMContentLoaded', () => {
           await Promise.all([refreshWeek()]);
         } catch (err) { toast(err.message, 'danger'); }
       }
+      return;
     }
+    const edit = e.target.closest('[data-editchore]');
+    if (edit) openChoreEditModal(Number(edit.dataset.editchore));
   });
 
   $('#choresList').addEventListener('change', async (e) => {
-    const day = e.target.closest('[data-changeday]');
-    if (day) {
-      try {
-        await api('/api/chores/' + day.dataset.changeday, { method: 'PUT', body: { dayOfWeek: Number(day.value) } });
-        await Promise.all([refreshWeek()]);
-      } catch (err) { toast(err.message, 'danger'); }
-      return;
-    }
     const toggle = e.target.closest('[data-togglechores]');
     if (toggle) {
       try {
@@ -706,6 +704,60 @@ document.addEventListener('DOMContentLoaded', () => {
         await Promise.all([refreshWeek()]);
       } catch (err) { toast(err.message, 'danger'); }
     }
+  });
+
+  // ---- Edit chore modal ----
+  let choreEditCtx = null;
+  const choreEditModal = () => bootstrap.Modal.getOrCreateInstance('#choreEditModal');
+
+  function openChoreEditModal(choreId) {
+    const chore = state.chores.find((c) => c.id === choreId);
+    if (!chore) return;
+    choreEditCtx = chore;
+    $('#choreEditTitle').value = chore.title;
+    $('#choreEditPoints').value = chore.points;
+    $('#choreEditFreq').value = chore.frequency;
+    renderChoreDaysPicker($('#choreEditDaysRow'), 'choreEditDay', chore.frequency, chore.days || []);
+    choreEditModal().show();
+  }
+
+  $('#choreEditFreq').addEventListener('change', (e) => {
+    const kept = readChoreDaysPicker($('#choreEditDaysRow'));
+    renderChoreDaysPicker($('#choreEditDaysRow'), 'choreEditDay', e.target.value, kept);
+  });
+
+  $('#choreEditForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!choreEditCtx) return;
+    const title = $('#choreEditTitle').value.trim();
+    if (!title) return toast('Title cannot be empty', 'warning');
+    try {
+      await api(`/api/chores/${choreEditCtx.id}`, {
+        method: 'PUT',
+        body: {
+          title,
+          frequency: $('#choreEditFreq').value,
+          days: readChoreDaysPicker($('#choreEditDaysRow')),
+          points: Number($('#choreEditPoints').value) || 1,
+        },
+      });
+      choreEditModal().hide();
+      toast('Chore saved');
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
+  $('#choreEditDelete').addEventListener('click', async () => {
+    if (!choreEditCtx) return;
+    const chore = choreEditCtx;
+    choreEditModal().hide();
+    const ok = await confirmDialog(`Delete “${chore.title}”? Its history will be removed too.`);
+    if (!ok) return;
+    try {
+      await api('/api/chores/' + chore.id, { method: 'DELETE' });
+      toast('Chore deleted', 'secondary');
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
   });
 
   // Rewards
@@ -760,6 +812,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ---- General settings ----
+  $('#weekStartDay').addEventListener('change', async (e) => {
+    try {
+      state.settings = await api('/api/settings', { method: 'PUT', body: { weekStartDay: Number(e.target.value) } });
+      await refreshWeek();
+      toast('Week start updated');
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
   $('#rewardForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = $('#rewardId').value;
@@ -781,22 +842,62 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ---- Auth ----
+  $('#loginPin').addEventListener('input', onPinChanged);
+
+  let loggingIn = false;
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (loggingIn) return;
+    const pin = $('#loginPin').value.trim();
+    if (!pin) return;
+    clearTimeout(pinAutoSubmitTimer);
+    loggingIn = true;
     const err = $('#loginError');
     err.classList.add('d-none');
     try {
-      await doLogin($('#loginPin').value.trim());
+      await doLogin(pin);
     } catch (e2) {
       err.textContent = e2.message;
       err.classList.remove('d-none');
-      $('#loginPin').select();
+      $('#loginPin').value = '';
+      $('#loginPin').focus();
+      const card = $('#loginCard');
+      card.classList.remove('shake');
+      // restart the animation even if it's still mid-play from a prior error
+      requestAnimationFrame(() => card.classList.add('shake'));
+    } finally {
+      loggingIn = false;
     }
   });
   $('#btnSignOut').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
     authToken.clear();
     location.reload();
+  });
+  $('#btnMyPin').addEventListener('click', () => {
+    $('#myPinCurrent').value = '';
+    $('#myPinNew').value = '';
+    $('#myPinError').classList.add('d-none');
+    bootstrap.Modal.getOrCreateInstance('#myPinModal').show();
+  });
+  $('#myPinForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('#myPinError');
+    err.classList.add('d-none');
+    const currentPin = $('#myPinCurrent').value.trim();
+    const pin = $('#myPinNew').value.trim();
+    if (!/^\d{4}$/.test(pin)) {
+      err.textContent = 'New PIN must be exactly 4 digits';
+      return err.classList.remove('d-none');
+    }
+    try {
+      await api(`/api/kids/${myKidId()}/pin`, { method: 'PUT', body: { currentPin, pin } });
+      bootstrap.Modal.getInstance('#myPinModal')?.hide();
+      toast('PIN updated');
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.classList.remove('d-none');
+    }
   });
   $('#adminPinForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -809,38 +910,74 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
-  let kidPinCtx = null;
-  const kidPinModal = () => bootstrap.Modal.getOrCreateInstance('#kidPinModal');
-  $('#kidPinsList').addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-kidpin]');
-    if (!btn) return;
-    const kid = state.kids.find((k) => k.id === Number(btn.dataset.kidpin));
+  let kidEditCtx = null;
+  const kidEditModal = () => bootstrap.Modal.getOrCreateInstance('#kidPinModal');
+
+  function openKidEditModal(kidId) {
+    const kid = state.kids.find((k) => k.id === kidId);
     if (!kid) return;
-    kidPinCtx = kid;
-    $('#kidPinModalTitle').textContent = `${kid.emoji} ${kid.name}'s PIN`;
+    kidEditCtx = kid;
+    $('#kidPinModalTitle').textContent = `${kid.emoji} ${kid.name}`;
+    $('#kidEditEmoji').value = kid.emoji;
+    $('#kidEditName').value = kid.name;
+    $('#kidEditColor').value = kid.color;
     $('#kidPinInput').value = '';
-    kidPinModal().show();
+    $('#kidPinInput').placeholder = kid.hasPin ? 'New PIN (leave blank to keep)' : '4-digit PIN (optional)';
+    $('#kidPinRemove').classList.toggle('d-none', !kid.hasPin);
+    $('#kidEditPinHint').textContent = kid.hasPin
+      ? 'A PIN is set for sign-in.'
+      : 'No PIN set — this kid can’t sign in on their own yet.';
+    kidEditModal().show();
+  }
+
+  $('#kidPinsList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-editkid]');
+    if (btn) openKidEditModal(Number(btn.dataset.editkid));
   });
+
   $('#kidPinForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!kidPinCtx) return;
+    if (!kidEditCtx) return;
+    const name = $('#kidEditName').value.trim();
+    if (!name) return toast('Name cannot be empty', 'warning');
+    const emoji = $('#kidEditEmoji').value.trim() || kidEditCtx.emoji;
+    const color = $('#kidEditColor').value;
     const pin = $('#kidPinInput').value.trim();
-    if (!/^\d{4}$/.test(pin)) return toast('Kid PIN must be exactly 4 digits', 'warning');
+    if (pin && !/^\d{4}$/.test(pin)) return toast('Kid PIN must be exactly 4 digits', 'warning');
     try {
-      await api(`/api/kids/${kidPinCtx.id}/pin`, { method: 'PUT', body: { pin } });
-      kidPinModal().hide();
-      toast(`${kidPinCtx.name}'s PIN saved`);
+      await api(`/api/kids/${kidEditCtx.id}`, { method: 'PUT', body: { name, emoji, color } });
+      if (pin) await api(`/api/kids/${kidEditCtx.id}/pin`, { method: 'PUT', body: { pin } });
+      kidEditModal().hide();
+      toast('Saved');
       await refreshAuth();
       await refreshWeek();
     } catch (err) { toast(err.message, 'danger'); }
   });
+
   $('#kidPinRemove').addEventListener('click', async () => {
-    if (!kidPinCtx) return;
+    if (!kidEditCtx) return;
     try {
-      await api(`/api/kids/${kidPinCtx.id}/pin`, { method: 'PUT', body: { pin: null } });
-      kidPinModal().hide();
-      toast(`${kidPinCtx.name}'s PIN removed`, 'secondary');
+      await api(`/api/kids/${kidEditCtx.id}/pin`, { method: 'PUT', body: { pin: null } });
+      kidEditCtx.hasPin = false;
+      $('#kidPinInput').value = '';
+      $('#kidPinInput').placeholder = '4-digit PIN (optional)';
+      $('#kidPinRemove').classList.add('d-none');
+      $('#kidEditPinHint').textContent = 'No PIN set — this kid can’t sign in on their own yet.';
+      toast(`${kidEditCtx.name}'s PIN removed`, 'secondary');
       await refreshAuth();
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
+  $('#kidEditDelete').addEventListener('click', async () => {
+    if (!kidEditCtx) return;
+    const kid = kidEditCtx;
+    kidEditModal().hide();
+    const ok = await confirmDialog(`Remove ${kid.name}? Their completed chores and points will also be removed.`);
+    if (!ok) return;
+    try {
+      await api('/api/kids/' + kid.id, { method: 'DELETE' });
+      toast('Removed', 'secondary');
       await refreshWeek();
     } catch (err) { toast(err.message, 'danger'); }
   });
@@ -848,10 +985,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Tab switching refresh
   const tabActions = {
     'pane-chart': () => refreshWeek(),
-    'pane-settings': () => refreshWeek(),
-    'pane-kids': () => refreshWeek(),
-    'pane-chores': () => refreshWeek(),
-    'pane-access': () => loadAccessTab(),
+    'pane-settings': () => refreshWeek(), // one scrolling page: Kids/Chores/General/Access all refresh together
     'pane-rewards': () => refreshRewards(),
   };
   document.querySelectorAll('[data-bs-toggle="pill"]').forEach((btn) => {
@@ -861,13 +995,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Initial load — auth first, chart only once the overlay situation is known
+  // Initial load — auth first, then settings (the chart's week-start-day
+  // lives there), and only then the chart/rewards that depend on it.
   refreshAuth()
-    .then(() => Promise.all([api('/api/settings'), refreshWeek()]))
-    .then(([settings]) => {
+    .then(() => api('/api/settings'))
+    .then((settings) => {
       state.settings = settings;
+      $('#weekStartDay').value = String(settings.weekStartDay ?? 1);
       applyRoleUI();
-      refreshRewards();
+      return Promise.all([refreshWeek(), refreshRewards()]);
     })
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));
 });

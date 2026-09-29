@@ -19,7 +19,7 @@
 </head>
 <body>
 
-<nav class="navbar navbar-dark bg-primary shadow-sm">
+<nav class="navbar navbar-dark app-navbar shadow-sm">
   <div class="container">
     <span class="navbar-brand mb-0 h1 fw-bold">
       <i class="bi bi-clipboard2-check me-2"></i>KiddoDash
@@ -27,6 +27,7 @@
     <span class="navbar-text d-none d-md-inline me-3">The household chore chart</span>
     <div class="d-flex align-items-center gap-2">
       <span class="badge text-bg-light d-none" id="whoBadge"></span>
+      <button class="btn btn-outline-light btn-sm d-none" id="btnMyPin" title="Change my PIN"><i class="bi bi-key"></i></button>
       <button class="btn btn-outline-light btn-sm d-none" id="btnSignOut" title="Sign out"><i class="bi bi-box-arrow-right"></i></button>
       <button class="btn btn-outline-light btn-sm" id="themeToggle" title="Toggle light/dark mode" aria-label="Toggle dark mode">
         <i class="bi bi-moon-fill theme-icon-dark d-none"></i>
@@ -75,14 +76,9 @@
 
   <!-- ============ SETTINGS TAB (setup screens: kids + chores) ============ -->
   <div class="tab-pane fade" id="pane-settings" role="tabpanel" aria-labelledby="tab-settings">
-    <ul class="nav nav-pills mb-3 gap-2 settings-subtabs" role="tablist">
-      <li class="nav-item"><button class="nav-link active" id="tab-sub-kids" data-bs-toggle="pill" data-bs-target="#pane-kids" type="button" role="tab" aria-controls="pane-kids"><i class="bi bi-people me-1"></i>Kids</button></li>
-      <li class="nav-item"><button class="nav-link" id="tab-sub-chores" data-bs-toggle="pill" data-bs-target="#pane-chores" type="button" role="tab" aria-controls="pane-chores"><i class="bi bi-list-check me-1"></i>Chores</button></li>
-      <li class="nav-item d-none" data-admin-only><button class="nav-link" id="tab-sub-access" data-bs-toggle="pill" data-bs-target="#pane-access" type="button" role="tab" aria-controls="pane-access"><i class="bi bi-shield-lock me-1"></i>Access</button></li>
-    </ul>
-    <div class="tab-content settings-subpanes">
-  <!-- ============ KIDS TAB ============ -->
-  <div class="tab-pane fade" id="pane-kids" role="tabpanel" aria-labelledby="tab-sub-kids">
+  <!-- ============ KIDS SECTION ============ -->
+  <section class="settings-section" id="pane-kids">
+    <h5 class="settings-section-title"><i class="bi bi-people me-1"></i>Kids</h5>
     <div class="row g-4">
       <div class="col-lg-5">
         <div class="card shadow-sm">
@@ -113,10 +109,11 @@
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- ============ CHORES TAB ============ -->
-  <div class="tab-pane fade" id="pane-chores" role="tabpanel" aria-labelledby="tab-sub-chores">
+  <!-- ============ CHORES SECTION ============ -->
+  <section class="settings-section" id="pane-chores">
+    <h5 class="settings-section-title"><i class="bi bi-list-check me-1"></i>Chores</h5>
     <div class="row g-4">
       <div class="col-lg-5">
         <div class="card shadow-sm">
@@ -125,27 +122,18 @@
             <form id="choreForm" class="vstack gap-2">
               <input class="form-control form-control-sm" id="choreTitle" placeholder="Make the bed" required>
               <div class="d-flex gap-2">
-                <select class="form-select form-select-sm w-50" id="choreFreq">
+                <select class="form-select form-select-sm" id="choreFreq">
                   <option value="weekly">Weekly</option>
                   <option value="daily">Daily</option>
                   <option value="schooldays">Each kid, school nights</option>
                   <option value="personal">Each kid, daily</option>
                 </select>
-                <select class="form-select form-select-sm" id="choreDay" disabled>
-                  <option value="">Any day</option>
-                  <option value="1">Monday</option>
-                  <option value="2">Tuesday</option>
-                  <option value="3">Wednesday</option>
-                  <option value="4">Thursday</option>
-                  <option value="5">Friday</option>
-                  <option value="6">Saturday</option>
-                  <option value="0">Sunday</option>
-                </select>
-                <div class="input-group input-group-sm w-25">
+                <div class="input-group input-group-sm flex-shrink-0" style="width:112px">
                   <span class="input-group-text">pts</span>
-                  <input type="number" min="1" max="99" class="form-control" id="chorePoints" value="1">
+                  <input type="number" min="1" max="999" class="form-control" id="chorePoints" value="1">
                 </div>
               </div>
+              <div id="choreDaysRow"></div>
               <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-plus-lg me-1"></i>Add chore</button>
             </form>
           </div>
@@ -158,10 +146,36 @@
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- ============ ACCESS TAB (PINs) ============ -->
-  <div class="tab-pane fade" id="pane-access" role="tabpanel" aria-labelledby="tab-sub-access">
+  <!-- ============ GENERAL SECTION ============ -->
+  <section class="settings-section" id="pane-general">
+    <h5 class="settings-section-title"><i class="bi bi-sliders me-1"></i>General</h5>
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="card shadow-sm">
+          <div class="card-header"><i class="bi bi-calendar-week me-1"></i>Chart</div>
+          <div class="card-body">
+            <label class="form-label small fw-bold" for="weekStartDay">Week starts on</label>
+            <select class="form-select form-select-sm" id="weekStartDay" style="max-width:220px">
+              <option value="0">Sunday</option>
+              <option value="1">Monday</option>
+              <option value="2">Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+            </select>
+            <p class="text-muted small mt-2 mb-0">Which day starts each week on the chore chart.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ACCESS SECTION (PINs) ============ -->
+  <section class="settings-section" id="pane-access">
+    <h5 class="settings-section-title"><i class="bi bi-shield-lock me-1"></i>Access</h5>
     <div class="row g-4">
       <div class="col-lg-6" id="accessAdminCard">
         <div class="card shadow-sm">
@@ -183,9 +197,7 @@
         </div>
       </div>
     </div>
-  </div>
-
-    </div><!-- /.settings-subpanes -->
+  </section>
   </div><!-- /#pane-settings -->
 
   <!-- ============ REWARDS TAB ============ -->
@@ -272,40 +284,102 @@
 </div>
 
 <!-- PIN login overlay (shown when auth is required and nobody is signed in) -->
-<div class="position-fixed top-0 start-0 w-100 h-100 bg-body" id="loginOverlay" style="z-index:3000;display:none">
-  <div class="d-flex align-items-center justify-content-center h-100">
-    <div class="card shadow" style="width:min(360px,92vw)">
-      <div class="card-body p-4 text-center">
-        <div class="display-6 mb-2" id="loginEmoji">🔒</div>
-        <h5 class="mb-1">KiddoDash</h5>
-        <p class="text-muted small mb-3">Enter your PIN to sign in</p>
-        <form id="loginForm">
-          <input type="password" inputmode="numeric" autocomplete="off" autofocus
-                 class="form-control form-control-lg text-center mb-2" id="loginPin"
-                 placeholder="PIN" maxlength="8" style="letter-spacing:.4em">
-          <div class="text-danger small mb-2 d-none" id="loginError"></div>
-          <button class="btn btn-primary w-100" type="submit">Sign in</button>
-        </form>
-      </div>
+<div class="position-fixed top-0 start-0 w-100 h-100 login-backdrop" id="loginOverlay" style="z-index:3000;display:none">
+  <div class="d-flex align-items-center justify-content-center w-100 h-100 p-3">
+    <div class="login-card text-center" id="loginCard">
+      <div class="login-logo" id="loginEmoji">🏡</div>
+      <h5 class="login-title mb-1">KiddoDash</h5>
+      <p class="text-muted small mb-3">Enter your PIN to sign in</p>
+      <form id="loginForm" autocomplete="off">
+        <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autofocus
+               class="form-control form-control-lg text-center login-pin-input mb-2" id="loginPin"
+               placeholder="PIN" maxlength="8">
+        <div class="text-danger small mb-2 d-none" id="loginError"></div>
+        <button class="btn btn-primary w-100" type="submit" id="loginSubmitBtn">Sign in</button>
+      </form>
     </div>
   </div>
 </div>
 
-<!-- Kid PIN modal (set/change/remove a kid's PIN) -->
+<!-- Edit kid modal (name/emoji/color/PIN/remove) -->
 <div class="modal fade" id="kidPinModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header py-2">
-        <h6 class="modal-title" id="kidPinModalTitle">Kid PIN</h6>
+        <h6 class="modal-title" id="kidPinModalTitle">Edit kid</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <form id="kidPinForm" class="modal-body vstack gap-2">
-        <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
-               id="kidPinInput" placeholder="4-digit PIN" maxlength="4">
-        <div class="d-flex gap-2">
-          <button class="btn btn-primary btn-sm flex-grow-1" type="submit">Save PIN</button>
-          <button class="btn btn-outline-danger btn-sm" type="button" id="kidPinRemove">Remove</button>
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="bi bi-emoji-smile"></i></span>
+          <input class="form-control" id="kidEditEmoji" maxlength="4" placeholder="🙂">
+          <span class="input-group-text">Name</span>
+          <input class="form-control" id="kidEditName" placeholder="Alex" required>
+          <input type="color" class="form-control form-control-color" id="kidEditColor" title="Pick a color">
         </div>
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="bi bi-key"></i></span>
+          <input type="password" inputmode="numeric" autocomplete="off" class="form-control"
+                 id="kidPinInput" placeholder="4-digit PIN" maxlength="4">
+          <button class="btn btn-outline-danger" type="button" id="kidPinRemove">Remove PIN</button>
+        </div>
+        <div class="form-text" id="kidEditPinHint"></div>
+        <div class="d-flex justify-content-between align-items-center pt-1">
+          <button class="btn btn-outline-danger btn-sm" type="button" id="kidEditDelete"><i class="bi bi-trash me-1"></i>Remove kid</button>
+          <button class="btn btn-primary btn-sm" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit chore modal -->
+<div class="modal fade" id="choreEditModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title">Edit chore</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="choreEditForm" class="modal-body vstack gap-2">
+        <input class="form-control form-control-sm" id="choreEditTitle" placeholder="Make the bed" required>
+        <div class="d-flex gap-2">
+          <select class="form-select form-select-sm" id="choreEditFreq">
+            <option value="weekly">Weekly</option>
+            <option value="daily">Daily</option>
+            <option value="schooldays">Each kid, school nights</option>
+            <option value="personal">Each kid, daily</option>
+          </select>
+          <div class="input-group input-group-sm flex-shrink-0" style="width:112px">
+            <span class="input-group-text">pts</span>
+            <input type="number" min="1" max="999" class="form-control" id="choreEditPoints">
+          </div>
+        </div>
+        <div id="choreEditDaysRow"></div>
+        <div class="d-flex justify-content-between align-items-center pt-1">
+          <button class="btn btn-outline-danger btn-sm" type="button" id="choreEditDelete"><i class="bi bi-trash me-1"></i>Delete chore</button>
+          <button class="btn btn-primary btn-sm" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Change my PIN modal (kid self-service) -->
+<div class="modal fade" id="myPinModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title">Change my PIN</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="myPinForm" class="modal-body vstack gap-2">
+        <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
+               id="myPinCurrent" placeholder="Current PIN" maxlength="4">
+        <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
+               id="myPinNew" placeholder="New 4-digit PIN" maxlength="4">
+        <div class="text-danger small d-none" id="myPinError"></div>
+        <button class="btn btn-primary btn-sm" type="submit">Save</button>
       </form>
     </div>
   </div>
