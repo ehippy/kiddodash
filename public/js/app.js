@@ -324,6 +324,9 @@ function loadWeek() {
       </tr>`;
     })
     .join('');
+  // Tint today's column in the body too (header already has .today-col); +1 skips the title cell.
+  const todayIdx = dates.findIndex((d) => dateStr(d) === today);
+  if (todayIdx >= 0) body.querySelectorAll('tr').forEach((tr) => tr.children[todayIdx + 1]?.classList.add('today-col'));
 }
 
 function doneBtnHtml(c, late = false) {

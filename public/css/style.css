@@ -172,6 +172,28 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   color: #7c5cd9;
 }
 
+/* Today's column: tinted as a background *image* so it layers over whatever
+   background-color the zebra stripe or row hover sets, instead of fighting it. */
+.chore-table .today-col {
+  background-image: linear-gradient(rgba(124, 92, 217, 0.11), rgba(124, 92, 217, 0.11));
+}
+
+.chore-table thead th.today-col {
+  border-radius: 10px 10px 0 0;
+}
+
+.chore-table tbody tr:last-child > .today-col {
+  border-radius: 0 0 10px 10px;
+}
+
+/* Row hover: only on devices that really hover, so a tap on the family tablet
+   doesn't leave a row stuck highlighted. */
+@media (hover: hover) {
+  .chore-table tbody tr:hover > * {
+    background-color: rgba(17, 24, 39, 0.11);
+  }
+}
+
 .chore-table thead .today-dot {
   display: inline-block;
   width: 8px;
@@ -474,6 +496,16 @@ body[data-bs-theme="dark"] {
 
 [data-bs-theme="dark"] .chore-table thead th.today-col {
   color: var(--kd-primary-light);
+}
+
+[data-bs-theme="dark"] .chore-table .today-col {
+  background-image: linear-gradient(rgba(164, 139, 239, 0.16), rgba(164, 139, 239, 0.16));
+}
+
+@media (hover: hover) {
+  [data-bs-theme="dark"] .chore-table tbody tr:hover > * {
+    background-color: rgba(255, 255, 255, 0.13);
+  }
 }
 
 [data-bs-theme="dark"] .chore-cell .cell-btn {
