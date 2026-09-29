@@ -1054,14 +1054,17 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
-  // Tab switching refresh
+  // Tab switching refresh. The open tab also goes in the URL hash (#rewards,
+  // #settings) so a page refresh comes back to it instead of the chart.
   const tabActions = {
-    'pane-chart': () => refreshWeek(),
-    'pane-settings': () => refreshWeek(), // one scrolling page: Kids/Chores/General/Access all refresh together
-    'pane-rewards': () => refreshRewards(),
+    '#pane-chart': () => refreshWeek(),
+    '#pane-settings': () => refreshWeek(), // one scrolling page: Kids/Chores/General/Access all refresh together
+    '#pane-rewards': () => refreshRewards(),
   };
   document.querySelectorAll('[data-bs-toggle="pill"]').forEach((btn) => {
     btn.addEventListener('shown.bs.tab', () => {
+      const name = btn.dataset.bsTarget.replace('#pane-', '');
+      history.replaceState(null, '', name === 'chart' ? location.pathname + location.search : '#' + name);
       const action = tabActions[btn.dataset.bsTarget];
       if (action) action();
     });
@@ -1076,6 +1079,13 @@ document.addEventListener('DOMContentLoaded', () => {
       $('#weekStartDay').value = String(settings.weekStartDay ?? 1);
       applyRoleUI();
       return Promise.all([refreshWeek(), refreshRewards()]);
+    })
+    .then(() => {
+      // Reopen the tab named in the hash, unless it's hidden for this role (Settings for kids).
+      const tab = document.getElementById('tab-' + location.hash.slice(1));
+      if (tab && tab.matches('[data-bs-toggle="pill"]') && !tab.classList.contains('d-none')) {
+        bootstrap.Tab.getOrCreateInstance(tab).show();
+      }
     })
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));
 });
