@@ -4,8 +4,10 @@ A self-hosted household chore chart for kids and families. Kids complete chores 
 
 ## Features
 
-- **Weekly chore chart** — daily, weekly (day-of-week), and "each kid, daily" (personal) chores
-- **Kid picker** — tap a cell to credit the chore to a kid; kids who already did a chore that day are hidden
+- **Today board** — the default view: a card per kid with today's chores as big tap targets, plus a card for shared chores
+- **Weekly chart** — the week at a glance, with each kid's face per cell: done, to do, late, missed, or coming up
+- **Chore types** — shared (daily or on set days) and each-kid (daily, set days, school nights, or once a week by a deadline)
+- **Kid picker** — tapping a shared chore asks who did it; kids who already did it are hidden
 - **Points & rewards** — kids earn points from chores and spend their balance on a rewards menu; redemptions are recorded (balance = earned − spent)
 - **Light/dark theme** — follows system preference, with a manual toggle
 - **Zero external services** — Node.js + Express + built-in SQLite (`node:sqlite`), no build step

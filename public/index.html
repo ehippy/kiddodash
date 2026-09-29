@@ -50,28 +50,52 @@
   <!-- ============ CHART TAB ============ -->
   <div class="tab-pane fade show active" id="pane-chart" role="tabpanel" aria-labelledby="tab-chart">
     <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
-      <h5 class="mb-0" id="weekLabel">This week</h5>
-      <div class="d-flex gap-2">
-        <button class="btn btn-outline-primary btn-sm" id="btnPrevWeek"><i class="bi bi-chevron-left"></i></button>
+      <div class="btn-group view-toggle" role="group" aria-label="Chart view">
+        <input type="radio" class="btn-check" name="chartView" id="viewToday" value="today" autocomplete="off" checked>
+        <label class="btn btn-outline-primary" for="viewToday"><i class="bi bi-sun me-1"></i>Today</label>
+        <input type="radio" class="btn-check" name="chartView" id="viewWeek" value="week" autocomplete="off">
+        <label class="btn btn-outline-primary" for="viewWeek"><i class="bi bi-calendar-week me-1"></i>Week</label>
+      </div>
+      <div class="d-flex align-items-center gap-2 d-none" id="weekNav">
+        <button class="btn btn-outline-primary btn-sm" id="btnPrevWeek" aria-label="Previous week"><i class="bi bi-chevron-left"></i></button>
         <button class="btn btn-outline-primary btn-sm" id="btnToday">This week</button>
-        <button class="btn btn-outline-primary btn-sm" id="btnNextWeek"><i class="bi bi-chevron-right"></i></button>
+        <button class="btn btn-outline-primary btn-sm" id="btnNextWeek" aria-label="Next week"><i class="bi bi-chevron-right"></i></button>
       </div>
     </div>
 
-    <div id="todaySummary" class="d-flex flex-wrap gap-2 mb-3"></div>
-
-    <div class="card shadow-sm">
-      <div class="table-responsive">
-        <table class="table table-borderless align-middle mb-0 chore-table">
-          <thead id="chartHead"></thead>
-          <tbody id="chartBody"></tbody>
-        </table>
-      </div>
+    <!-- Today: one card per kid, plus shared chores -->
+    <div id="todayView">
+      <h5 class="mb-3" id="todayLabel"></h5>
+      <div id="todayBoard" class="row g-3"></div>
+      <p class="text-muted small mt-3 mb-0">
+        <i class="bi bi-info-circle me-1"></i>Tap a chore when it's done. Tap a finished one to undo it.
+      </p>
     </div>
-    <p class="text-muted small mt-2">
-      <i class="bi bi-info-circle me-1"></i>Click a highlighted cell to check off a chore. Click a chip to undo.
-      Daily chores are due every day for each kid; weekly chores are due on their day.
-    </p>
+
+    <!-- Week: the grid, for looking back and planning ahead -->
+    <div id="weekView" class="d-none">
+      <h5 class="mb-3" id="weekLabel">This week</h5>
+      <div class="card shadow-sm">
+        <div class="table-responsive">
+          <table class="table table-borderless align-middle mb-0 chore-table">
+            <thead id="chartHead"></thead>
+            <tbody id="chartBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="chart-legend mt-2">
+        <span><span class="av todo legend-av">🙂</span> to do</span>
+        <span><span class="av done legend-av" style="--kid-color:#7c5cd9">🙂</span> done</span>
+        <span><span class="av late legend-av">🙂</span> late</span>
+        <span><span class="av missed legend-av">🙂</span> missed</span>
+        <span><span class="av future legend-av">🙂</span> coming up</span>
+        <span><i class="bi bi-person-fill scope-icon"></i> each kid</span>
+        <span><i class="bi bi-people-fill scope-icon"></i> shared</span>
+      </div>
+      <p class="text-muted small mt-2 mb-0">
+        <i class="bi bi-info-circle me-1"></i>Tap a faded face to check it off (past days too, if someone forgot). Tap a check to undo.
+      </p>
+    </div>
   </div>
 
   <!-- ============ SETTINGS TAB (setup screens: kids + chores) ============ -->

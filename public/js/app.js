@@ -9,6 +9,7 @@ const state = {
   kidTotals: [], // from /api/totals: earned, spent, balance
   recentSpends: [], // from /api/redeemptions
   weekOffset: 0, // 0 = current week
+  chartView: (() => { try { return localStorage.getItem('kiddodash-view') === 'week' ? 'week' : 'today'; } catch { return 'today'; } })(),
   authRequired: false, // true once any PIN is configured server-side
   session: null, // { role: 'admin' } | { role: 'kid', kid: {...} } | null
 };
@@ -96,16 +97,16 @@ function choreIsDueOn(chore, dow) {
 }
 
 // 'due_by' chores: each kid does it once per chart week, on any day; the chosen
-// day is the deadline. These read the week grid, so they cover the week on screen.
+// day is the deadline.
 function deadlineDate(chore, dates) {
   const d = dates.find((x) => x.getDay() === chore.days?.[0]);
   return d ? dateStr(d) : null;
 }
 
-// kidId -> { date, completion } for every kid who did this chore this week
-function doneThisWeek(chore) {
+// kidId -> { date, completion } for every kid who did this chore in `grid`'s week
+function doneThisWeek(chore, grid) {
   const out = new Map();
-  for (const [ds, byKid] of Object.entries((state.weekGrid || {})[chore.id] || {})) {
+  for (const [ds, byKid] of Object.entries((grid || {})[chore.id] || {})) {
     for (const [kidId, c] of Object.entries(byKid)) out.set(Number(kidId), { date: ds, completion: c });
   }
   return out;
@@ -258,130 +259,348 @@ async function doLogin(pin) {
 
 /* ============================ Chart tab ============================ */
 
+// The chart tab has two views: Today (a board per kid, the default — what do I
+// have to do now?) and Week (the grid, for looking back and planning ahead).
+// Today always reads the *current* week's grid, even while Week is paged elsewhere.
+
+const PER_KID = new Set(['personal', 'schooldays', 'due_by']);
+const isPerKid = (chore) => PER_KID.has(chore.frequency);
+const canActFor = (kidId) => isAdmin() || myKidId() === kidId;
+const ptsLabel = (n) => `${n} pt${n === 1 ? '' : 's'}`;
+
+// Plain-language schedule, shown as a tooltip and under titles on the Today board.
+function scheduleText(chore) {
+  const days = chore.days && chore.days.length ? sortByWeekOrder(chore.days).map((d) => DAY_NAMES[d]).join(', ') : null;
+  const when = {
+    daily: 'every day',
+    schooldays: 'school nights (Mon–Fri)',
+    personal: days || 'every day',
+    weekly: days || '',
+    due_by: `once a week, due by ${DAYS_FULL[chore.days?.[0]] ?? '?'}`,
+  }[chore.frequency];
+  return `${isPerKid(chore) ? 'Each kid' : 'Shared — anyone can do it'} · ${when}`;
+}
+
+const scopeIcon = (chore) =>
+  isPerKid(chore)
+    ? '<i class="bi bi-person-fill scope-icon" aria-label="Each kid"></i>'
+    : '<i class="bi bi-people-fill scope-icon" aria-label="Shared"></i>';
+
+function setChartView(view) {
+  state.chartView = view;
+  try { localStorage.setItem('kiddodash-view', view); } catch { /* storage unavailable */ }
+  renderChart();
+}
+
+function renderChart() {
+  const week = state.chartView === 'week';
+  $('#viewToday').checked = !week;
+  $('#viewWeek').checked = week;
+  $('#todayView').classList.toggle('d-none', week);
+  $('#weekView').classList.toggle('d-none', !week);
+  $('#weekNav').classList.toggle('d-none', !week);
+  if (week) loadWeek();
+  else renderTodayBoard();
+}
+
+/* ---------- Today board ---------- */
+
+// One kid's chores for today: each-kid chores due today, plus due_by chores they
+// haven't done yet this week (or did today). Shared chores live in their own card.
+function todayItemsForKid(kid, today, dates) {
+  const grid = state.currentGrid || {};
+  const dow = new Date().getDay();
+  const items = [];
+  for (const chore of state.chores.filter((c) => c.active && isPerKid(c))) {
+    if (chore.frequency === 'due_by') {
+      const d = doneThisWeek(chore, grid).get(kid.id);
+      if (d && d.date !== today) continue;
+      const deadline = deadlineDate(chore, dates);
+      const dueDay = DAY_NAMES[chore.days?.[0]];
+      const late = d ? d.date > deadline : today > deadline;
+      const note = d
+        ? late ? 'done late' : 'done this week'
+        : today < deadline ? `any day, due by ${dueDay}` : today === deadline ? 'due today' : `late — was due ${dueDay}`;
+      items.push({ chore, done: d?.completion || null, note, late });
+    } else if (choreIsDueOn(chore, dow)) {
+      items.push({ chore, done: grid[chore.id]?.[today]?.[kid.id] || null, note: '', late: false });
+    }
+  }
+  // Late first (needs attention), then to-do, then done.
+  const rank = (i) => (i.done ? 2 : i.late ? 0 : 1);
+  return items.sort((a, b) => rank(a) - rank(b));
+}
+
+function boardItemHtml({ chore, done, note, late }, kid, today) {
+  const cls = `board-item${done ? ' done' : ''}${late && !done ? ' late' : ''}`;
+  const noteHtml = note ? `<span class="board-note">${esc(note)}</span>` : '';
+  const body = `
+    <span class="board-check">${done ? `<i class="bi bi-${late ? 'clock-history' : 'check-lg'}"></i>` : ''}</span>
+    <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${noteHtml}</span>
+    <span class="board-pts">+${chore.points}</span>`;
+  if (!canActFor(kid.id)) {
+    return `<div class="${cls}" title="Only ${esc(kid.name)} or a parent can check this">${body}</div>`;
+  }
+  return done
+    ? `<button class="${cls}" data-undo="${done.id}" data-undo-label="${esc(kid.name)}’s “${esc(chore.title)}”" title="Tap to undo">${body}</button>`
+    : `<button class="${cls}" data-complete data-chore="${chore.id}" data-kid="${kid.id}" data-date="${today}" title="Tap when done">${body}</button>`;
+}
+
+function renderTodayBoard() {
+  const board = $('#todayBoard');
+  const now = new Date();
+  const today = dateStr(now);
+  const dates = weekDates(0);
+  $('#todayLabel').textContent = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+
+  if (!state.kids.length) {
+    board.innerHTML = '<div class="col-12"><div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Settings → Kids).</div></div>';
+    return;
+  }
+  // A signed-in kid sees their own card first.
+  const kids = [...state.kids].sort((a, b) => (b.id === myKidId()) - (a.id === myKidId()));
+  const cards = kids.map((kid) => {
+    const items = todayItemsForKid(kid, today, dates);
+    const doneCount = items.filter((i) => i.done).length;
+    const pct = items.length ? Math.round((doneCount / items.length) * 100) : 100;
+    const earned = items.filter((i) => i.done).reduce((sum, i) => sum + i.done.points, 0);
+    const status = !items.length
+      ? 'Nothing today'
+      : doneCount === items.length
+        ? 'All done! 🎉'
+        : `${doneCount} of ${items.length} done`;
+    return `<div class="col-12 col-md-6 col-xl-4">
+      <div class="kid-board${doneCount === items.length ? ' all-done' : ''}" style="--kid-color:${esc(kid.color)}">
+        <div class="kid-board-head">
+          <span class="kid-avatar" style="background:${esc(kid.color)}">${esc(kid.emoji)}</span>
+          <div class="flex-grow-1">
+            <div class="kid-board-name">${esc(kid.name)}</div>
+            <div class="kid-board-status">${status}${earned ? ` · +${earned} today` : ''}</div>
+          </div>
+        </div>
+        <div class="kid-board-progress"><span style="width:${pct}%"></span></div>
+        <div class="board-list">
+          ${items.map((i) => boardItemHtml(i, kid, today)).join('') || '<div class="board-empty">No chores for you today 🎉</div>'}
+        </div>
+      </div>
+    </div>`;
+  });
+
+  // Shared chores due today: one row each; tapping asks who did it.
+  const dow = now.getDay();
+  const shared = state.chores.filter((c) => c.active && !isPerKid(c) && choreIsDueOn(c, dow));
+  const sharedRows = shared.map((chore) => {
+    const doneBy = Object.values(state.currentGrid?.[chore.id]?.[today] || {})[0];
+    const body = (who) => `
+      <span class="board-check">${doneBy ? '<i class="bi bi-check-lg"></i>' : ''}</span>
+      <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${who}</span>
+      <span class="board-pts">+${chore.points}</span>`;
+    if (doneBy) {
+      const who = `<span class="board-note"><span class="who-dot" style="background:${esc(doneBy.kidColor)}"></span>${esc(doneBy.kidEmoji)} ${esc(doneBy.kidName)} did it</span>`;
+      return canActFor(doneBy.kidId)
+        ? `<button class="board-item done" data-undo="${doneBy.id}" data-undo-label="${esc(doneBy.kidName)}’s “${esc(chore.title)}”" title="Tap to undo">${body(who)}</button>`
+        : `<div class="board-item done">${body(who)}</div>`;
+    }
+    const canAct = isAdmin() || myKidId() !== null;
+    return canAct
+      ? `<button class="board-item" data-chore="${chore.id}" data-date="${today}" title="Tap when done">${body('<span class="board-note">whoever does it gets the points</span>')}</button>`
+      : `<div class="board-item">${body('')}</div>`;
+  });
+  if (sharedRows.length) {
+    cards.push(`<div class="col-12 col-md-6 col-xl-4">
+      <div class="kid-board shared-board">
+        <div class="kid-board-head">
+          <span class="kid-avatar shared-avatar"><i class="bi bi-people-fill"></i></span>
+          <div class="flex-grow-1">
+            <div class="kid-board-name">Shared</div>
+            <div class="kid-board-status">Anyone can do these</div>
+          </div>
+        </div>
+        <div class="board-list">${sharedRows.join('')}</div>
+      </div>
+    </div>`);
+  }
+  board.innerHTML = cards.join('');
+}
+
+/* ---------- Week grid ---------- */
+
+// A kid's avatar in a cell. Done: solid (clock badge if late). To do: faded,
+// dashed ring in the kid's color — today it's tappable, in the past it's red
+// ("missed", still tappable to backfill), in the future it's inert.
+function avatarHtml(kid, { state: st, completion, date, choreId, late = false }) {
+  const title = (s) => `${esc(kid.name)} — ${s}`;
+  if (st === 'done') {
+    const c = completion;
+    const badge = late ? '<span class="av-badge"><i class="bi bi-clock-history"></i></span>' : '';
+    return canActFor(c.kidId)
+      ? `<button class="av done" style="--kid-color:${esc(c.kidColor)}" data-undo="${c.id}" data-undo-label="${esc(c.kidName)}’s check" title="${title(late ? 'done late · tap to undo' : 'done · tap to undo')}">${esc(c.kidEmoji)}${badge}</button>`
+      : `<span class="av done" style="--kid-color:${esc(c.kidColor)}" title="${title(late ? 'done late' : 'done')}">${esc(c.kidEmoji)}${badge}</span>`;
+  }
+  const label = { todo: 'to do · tap when done', late: 'late · tap when done', missed: 'missed · tap to fill in', future: 'coming up' }[st];
+  if (st === 'future' || !canActFor(kid.id)) {
+    return `<span class="av ${st}" style="--kid-color:${esc(kid.color)}" title="${title(label.split(' · ')[0])}">${esc(kid.emoji)}</span>`;
+  }
+  return `<button class="av ${st}" style="--kid-color:${esc(kid.color)}" data-complete data-chore="${choreId}" data-kid="${kid.id}" data-date="${date}" title="${title(label)}">${esc(kid.emoji)}</button>`;
+}
+
+// Same idea for an undone shared chore: a single "+" slot that opens the kid picker.
+function sharedSlotHtml(st, choreId, date) {
+  const canAct = st !== 'future' && (isAdmin() || myKidId() !== null);
+  const icon = st === 'missed' ? 'x-lg' : 'plus-lg';
+  const label = { todo: 'Tap when done', missed: 'Missed · tap to fill in', future: 'Coming up' }[st];
+  return canAct
+    ? `<button class="av shared ${st}" data-chore="${choreId}" data-date="${date}" title="${label}"><i class="bi bi-${icon}"></i></button>`
+    : `<span class="av shared ${st}" title="${label}"><i class="bi bi-${icon}"></i></span>`;
+}
+
+const timeState = (ds, today) => (ds < today ? 'missed' : ds === today ? 'todo' : 'future');
+
+function choreCellsHtml(chore, dates, today) {
+  const grid = state.weekGrid || {};
+  return dates
+    .map((d) => {
+      const ds = dateStr(d);
+      const doneMap = grid[chore.id]?.[ds] || {};
+      const due = choreIsDueOn(chore, d.getDay());
+      const parts = [];
+      if (isPerKid(chore)) {
+        for (const kid of state.kids) {
+          if (doneMap[kid.id]) parts.push(avatarHtml(kid, { state: 'done', completion: doneMap[kid.id] }));
+          else if (due) parts.push(avatarHtml(kid, { state: timeState(ds, today), date: ds, choreId: chore.id }));
+        }
+      } else {
+        const done = Object.values(doneMap);
+        for (const c of done) parts.push(avatarHtml(state.kids.find((k) => k.id === c.kidId) || {}, { state: 'done', completion: c }));
+        if (due && !done.length) parts.push(sharedSlotHtml(timeState(ds, today), chore.id, ds));
+      }
+      return cellHtml(parts);
+    })
+    .join('');
+}
+
+// A due_by row: each kid's avatar lands on the day they actually did it. Kids still
+// to go sit in today's column (amber once the deadline has passed); for other
+// weeks they sit on the deadline — red if that week is over, inert if it's ahead.
+function dueByCellsHtml(chore, dates, today) {
+  const deadline = deadlineDate(chore, dates);
+  const done = doneThisWeek(chore, state.weekGrid);
+  const dateStrs = dates.map(dateStr);
+  const slotDs = dateStrs.includes(today) ? today : deadline;
+  const slotState = slotDs === today ? (today > deadline ? 'late' : 'todo') : slotDs < today ? 'missed' : 'future';
+  return dateStrs
+    .map((ds) => {
+      const parts = [];
+      for (const kid of state.kids) {
+        const d = done.get(kid.id);
+        if (d?.date === ds) parts.push(avatarHtml(kid, { state: 'done', completion: d.completion, late: ds > deadline }));
+        else if (!d && ds === slotDs) parts.push(avatarHtml(kid, { state: slotState, date: ds, choreId: chore.id }));
+      }
+      if (ds === deadline) parts.push('<span class="due-tag">due</span>');
+      return cellHtml(parts);
+    })
+    .join('');
+}
+
+const cellHtml = (parts) =>
+  parts.length ? `<td class="chore-cell"><div class="cell-avs">${parts.join('')}</div></td>` : '<td class="chore-cell"></td>';
+
 function loadWeek() {
   const dates = weekDates(state.weekOffset);
   const today = dateStr(new Date());
 
-  // Header
-  const head = $('#chartHead');
-  head.innerHTML = `<tr><th class="ps-2" style="min-width:150px">Chore</th>${dates
+  $('#chartHead').innerHTML = `<tr><th class="chore-title-head">Chore</th>${dates
     .map(
       (d) => `<th class="text-center ${dateStr(d) === today ? 'today-col' : ''}">
-        ${DAY_NAMES[d.getDay()]}${dateStr(d) === today ? '<span class="today-dot"></span>' : ''}
-        <div class="fw-normal" style="font-size:.7rem;color:#9ca3af">${d.getDate()}</div>
+        ${DAY_NAMES[d.getDay()]}
+        <div class="day-num">${d.getDate()}</div>
       </th>`
     )
     .join('')}</tr>`;
 
-  $('#weekLabel').textContent =
+  const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const rel =
     state.weekOffset === 0
       ? 'This week'
-      : state.weekOffset < 0
-        ? `${-state.weekOffset} week${-state.weekOffset > 1 ? 's' : ''} ago`
-        : `In ${state.weekOffset} week${state.weekOffset > 1 ? 's' : ''}`;
+      : state.weekOffset === -1
+        ? 'Last week'
+        : state.weekOffset === 1
+          ? 'Next week'
+          : state.weekOffset < 0
+            ? `${-state.weekOffset} weeks ago`
+            : `In ${state.weekOffset} weeks`;
+  $('#weekLabel').innerHTML = `${rel} <span class="week-range">${fmt(dates[0])} – ${fmt(dates[6])}</span>`;
+  $('#btnToday').disabled = state.weekOffset === 0;
 
-  // Rows — paused chores stay visible in the Chores tab for editing, but never
-  // show up on the family's chart.
+  // Rows — paused chores stay visible in Settings for editing, but never show up
+  // on the family's chart. Grouped: each-kid chores, then shared.
   const body = $('#chartBody');
-  const grid = state.weekGrid || {};
   const activeChores = state.chores.filter((c) => c.active);
   if (!activeChores.length) {
-    body.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="bi bi-clipboard2-x"></i>No chores yet — add some in the “Chores” tab.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="bi bi-clipboard2-x"></i>No chores yet — add some in Settings.</td></tr>`;
     return;
   }
   if (!state.kids.length) {
-    body.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="bi bi-people"></i>Add a kid first (Kids tab), then check off chores.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="bi bi-people"></i>Add a kid first (Settings → Kids), then check off chores.</td></tr>`;
     return;
   }
-  body.innerHTML = activeChores
-    .map((chore) => {
-      const cells = chore.frequency === 'due_by' ? dueByCellsHtml(chore, dates, today) : dates
-        .map((d) => {
-          const ds = dateStr(d);
-          const isDue = choreIsDueOn(chore, d.getDay());
-          const doneMap = (grid[chore.id] || {})[ds];
-          const due = isDue;
-          const doneKids = state.kids.filter((k) => doneMap && doneMap[k.id]);
-          // personal and schooldays chores are done once per kid; the rest are shared
-          const perKid = chore.frequency === 'personal' || chore.frequency === 'schooldays';
-          const remaining = due && (perKid ? state.kids.length - doneKids.length : doneMap ? 0 : 1);
-          const parts = doneKids.map((k) => doneBtnHtml(doneMap[k.id]));
-          if (remaining > 0 && (isAdmin() || myKidId() !== null)) {
-            const hint =
-              perKid
-                ? `${esc(chore.title)} — ${remaining} kid${remaining > 1 ? 's' : ''} to go`
-                : 'Check off';
-            parts.push(`<button class="cell-btn" data-chore="${chore.id}" data-date="${ds}" title="${hint}">✎</button>`);
-          }
-          if (!due && !doneKids.length) return `<td class="chore-cell"></td>`;
-          if (!parts.length) return `<td class="chore-cell"></td>`;
-          return `<td class="chore-cell text-center"><div class="d-flex flex-column gap-1">${parts.join('')}</div></td>`;
-        })
-        .join('');
-      return `<tr>
-        <td class="chore-title-cell ps-2">${esc(chore.title)}<span class="chore-pts">${chore.points} pt${chore.points > 1 ? 's' : ''}</span>${freqBadgeHtml(chore)}</td>
-        ${cells}
-      </tr>`;
-    })
+  const row = (chore) => `<tr>
+      <td class="chore-title-cell" title="${esc(scheduleText(chore))}">
+        <div class="chore-name">${esc(chore.title)}</div>
+        <div class="chore-meta">${scopeIcon(chore)}<span class="chore-pts">${ptsLabel(chore.points)}</span></div>
+      </td>
+      ${chore.frequency === 'due_by' ? dueByCellsHtml(chore, dates, today) : choreCellsHtml(chore, dates, today)}
+    </tr>`;
+  const groups = [
+    ['<i class="bi bi-person-fill"></i> Each kid', activeChores.filter(isPerKid)],
+    ['<i class="bi bi-people-fill"></i> Shared — anyone can do it', activeChores.filter((c) => !isPerKid(c))],
+  ].filter(([, list]) => list.length);
+  body.innerHTML = groups
+    .map(([label, list]) => `<tr class="group-row"><th colspan="8"><span class="group-label">${label}</span></th></tr>${list.map(row).join('')}`)
     .join('');
-  // Tint today's column in the body too (header already has .today-col); +1 skips the title cell.
+
+  // Tint today's column in the body too; +1 skips the title cell.
   const todayIdx = dates.findIndex((d) => dateStr(d) === today);
-  if (todayIdx >= 0) body.querySelectorAll('tr').forEach((tr) => tr.children[todayIdx + 1]?.classList.add('today-col'));
-}
-
-function doneBtnHtml(c, late = false) {
-  const undoable = isAdmin() || myKidId() === c.kidId;
-  return `<button class="cell-btn done" style="background:${esc(c.kidColor)}"
-        ${undoable ? `data-undo="${c.id}" title="${late ? 'Done late — click' : 'Click'} to undo"` : `disabled title="${late ? 'Done late. ' : ''}Only a parent can undo this"`}
-        data-kid="${esc(c.kidName)}">
-        <i class="bi bi-${late ? 'clock-history' : 'check-lg'}"></i>${esc(c.kidEmoji)} ${esc(c.kidName)}
-      </button>`;
-}
-
-// A due_by row: each kid's check shows on the day they actually did it (a clock
-// icon if after the deadline). The ✎ sits in today's column, or on the deadline
-// for other weeks, and turns amber once the deadline has passed.
-function dueByCellsHtml(chore, dates, today) {
-  const deadline = deadlineDate(chore, dates);
-  const done = doneThisWeek(chore);
-  const remaining = state.kids.length - state.kids.filter((k) => done.has(k.id)).length;
-  const dateStrs = dates.map(dateStr);
-  const pencilDs = dateStrs.includes(today) ? today : deadline;
-  const canAct = isAdmin() || myKidId() !== null;
-  return dateStrs
-    .map((ds) => {
-      const parts = state.kids
-        .filter((k) => done.get(k.id)?.date === ds)
-        .map((k) => doneBtnHtml(done.get(k.id).completion, ds > deadline));
-      if (ds === pencilDs && remaining > 0 && canAct) {
-        const overdue = ds > deadline;
-        const hint = `${esc(chore.title)} — ${remaining} kid${remaining > 1 ? 's' : ''} to go${overdue ? ' (overdue)' : ''}`;
-        parts.push(`<button class="cell-btn${overdue ? ' overdue' : ''}" data-chore="${chore.id}" data-date="${ds}" title="${hint}">${overdue ? '<i class="bi bi-exclamation-circle"></i> late' : '✎'}</button>`);
-      }
-      if (ds === deadline) parts.push('<span class="due-tag">due</span>');
-      if (!parts.length) return `<td class="chore-cell"></td>`;
-      return `<td class="chore-cell text-center"><div class="d-flex flex-column gap-1">${parts.join('')}</div></td>`;
-    })
-    .join('');
+  if (todayIdx >= 0) {
+    body.querySelectorAll('tr:not(.group-row)').forEach((tr) => tr.children[todayIdx + 1]?.classList.add('today-col'));
+    // On a phone the days scroll sideways: bring today into view, just right of the sticky titles.
+    const scroller = body.closest('.table-responsive');
+    const th = $('#chartHead th.today-col');
+    const titleW = $('#chartHead th.chore-title-head').offsetWidth;
+    if (scroller.scrollWidth > scroller.clientWidth) scroller.scrollLeft = Math.max(0, th.offsetLeft - titleW - th.offsetWidth);
+  }
 }
 
 async function refreshWeek() {
-  const [data, totals] = await Promise.all([
-    api('/api/week?offset=' + state.weekOffset),
-    api('/api/totals'),
-  ]);
+  const reqs = [api('/api/week?offset=' + state.weekOffset), api('/api/totals')];
+  if (state.weekOffset !== 0) reqs.push(api('/api/week?offset=0'));
+  const [data, totals, current] = await Promise.all(reqs);
   state.kids = data.kids;
   state.chores = data.chores;
   state.kidTotals = totals;
   // grid is already { choreId: { date: { kidId: completion } } }
   state.weekGrid = data.grid;
-  state.weekDates = data.week.map((w) => w.date);
-  renderTodaySummary();
-  loadWeek();
+  state.currentGrid = (current || data).grid; // the Today board always shows this week
+  state.currentDates = (current || data).week.map((w) => w.date);
+  renderChart();
   loadKidsTab();
   loadChoresTab();
   loadAccessTab(); // Settings is one scrolling page now — keep every section in sync
   applyRoleUI(); // re-apply after re-render (chart buttons depend on role)
+}
+
+// The grid a date belongs to: the Today board's current week, or the week on screen.
+const gridForDate = (date) => (state.currentDates?.includes(date) ? state.currentGrid : state.weekGrid) || {};
+
+async function completeChore(choreId, kidId, date) {
+  try {
+    const done = await api('/api/completions', { method: 'POST', body: { choreId, kidId, date } });
+    const kid = state.kids.find((k) => k.id === done.kidId);
+    toast(`${kid?.emoji || '🎉'} ${kid?.name || 'Someone'} got ${ptsLabel(done.points)}!`);
+    await refreshWeek();
+  } catch (err) {
+    toast(err.message, 'danger');
+  }
 }
 
 async function openCellPicker(choreId, date) {
@@ -389,13 +608,14 @@ async function openCellPicker(choreId, date) {
   const chore = state.chores.find((c) => c.id === Number(choreId));
   if (!chore) return;
   const day = DAYS_FULL[new Date(date + 'T00:00:00').getDay()];
-  $('#cellModalTitle').textContent = `${chore.title} — ${day}`;
+  $('#cellModalTitle').textContent = `Who did “${chore.title}”? — ${day}`;
   if (!state.kids.length) {
     $('#cellModalBody').innerHTML =
-      '<div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Kids tab), then check off chores.</div>';
+      '<div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Settings → Kids), then check off chores.</div>';
   } else {
-    const doneMap = (state.weekGrid?.[Number(choreId)] || {})[date] || {};
-    const doneWeek = chore.frequency === 'due_by' ? doneThisWeek(chore) : null;
+    const grid = gridForDate(date);
+    const doneMap = grid[Number(choreId)]?.[date] || {};
+    const doneWeek = chore.frequency === 'due_by' ? doneThisWeek(chore, grid) : null;
     const isDone = (k) => (doneWeek ? doneWeek.has(k.id) : !!doneMap[k.id]);
     const mine = myKidId();
     const available = state.kids.filter((k) => !isDone(k) && (mine === null || k.id === mine));
@@ -405,7 +625,7 @@ async function openCellPicker(choreId, date) {
             (k) => `<button class="pick-kid-btn" style="--kid-color:${esc(k.color)}" data-kid="${k.id}">
             <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
             <span>${esc(k.name)}</span>
-            <span class="badge text-bg-light ms-auto">${chore.points} pt${chore.points > 1 ? 's' : ''}</span>
+            <span class="badge text-bg-light ms-auto">${ptsLabel(chore.points)}</span>
           </button>`
           )
           .join('')}</div>`
@@ -416,45 +636,6 @@ async function openCellPicker(choreId, date) {
 
 // Context for the cell being picked (chore + date)
 let pickCtx = null;
-
-/* ============================ Today summary (chart) ============================ */
-
-// Per-kid "today" progress: which chores are due for this kid today, and which
-// are already done. Reads the same week grid as the chart, so it can't go stale
-// relative to it (and unlike the old Today tab, personal chores count).
-function renderTodaySummary() {
-  const el = $('#todaySummary');
-  if (!el) return;
-  if (!state.kids.length || !state.chores.length) {
-    el.innerHTML = '';
-    return;
-  }
-  const today = dateStr(new Date());
-  const dow = new Date().getDay();
-  const grid = state.weekGrid || {};
-  const due = state.chores.filter((c) => c.active !== false && choreIsDueOn(c, dow));
-  const dueBy = state.chores.filter((c) => c.active !== false && c.frequency === 'due_by');
-  if (!due.length && !dueBy.length) {
-    el.innerHTML = '<span class="today-chip" style="--kid-color:#6b7280">🎉 Nothing due today — enjoy the free day!</span>';
-    return;
-  }
-  el.innerHTML = state.kids
-    .map((k) => {
-      // A due_by chore stays on the list until done, then counts only on the day it was
-      // done, so a Saturday laundry doesn't inflate Sunday's count.
-      const byDone = dueBy.map((c) => doneThisWeek(c).get(k.id));
-      const byCount = byDone.filter((d) => !d || d.date === today);
-      const total = due.length + byCount.length;
-      const done = due.filter((c) => (grid[c.id] || {})[today]?.[k.id]).length + byCount.filter(Boolean).length;
-      const allDone = done === total;
-      return `<span class="today-chip ${allDone ? 'done' : ''}" style="--kid-color:${esc(k.color)}">
-        <span class="today-dot-kid"></span>${esc(k.emoji)} ${esc(k.name)}
-        <span class="today-chip-count">${done}/${total}</span>
-        ${allDone ? '<i class="bi bi-check-lg"></i>' : ''}
-      </span>`;
-    })
-    .join('');
-}
 
 /* ============================ Kids tab ============================ */
 
@@ -650,17 +831,29 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btnNextWeek').addEventListener('click', () => { state.weekOffset++; refreshWeek(); });
   $('#btnToday').addEventListener('click', () => { state.weekOffset = 0; refreshWeek(); });
 
-  // Chart cell clicks (delegated)
-  $('#chartBody').addEventListener('click', async (e) => {
+  // Today / Week toggle
+  $('#viewToday').addEventListener('change', () => setChartView('today'));
+  $('#viewWeek').addEventListener('change', () => setChartView('week'));
+
+  // Chart clicks, both views (delegated): undo a check, check off for a known
+  // kid directly, or open the kid picker for a shared chore.
+  $('#pane-chart').addEventListener('click', async (e) => {
     const undo = e.target.closest('[data-undo]');
     if (undo) {
-      const ok = await confirmDialog(`Undo “${undo.dataset.kid}” for this chore?`);
+      const ok = await confirmDialog(`Undo ${undo.dataset.undoLabel || 'this check'}?`);
       if (ok) {
-        await api('/api/completions/' + undo.dataset.undo, { method: 'DELETE' });
-        toast('Undone');
-        await Promise.all([refreshWeek()]);
+        try {
+          await api('/api/completions/' + undo.dataset.undo, { method: 'DELETE' });
+          toast('Undone', 'secondary');
+          await refreshWeek();
+        } catch (err) { toast(err.message, 'danger'); }
       }
       return;
+    }
+    const direct = e.target.closest('[data-complete]');
+    if (direct) {
+      direct.disabled = true; // no double-taps while the request is in flight
+      return completeChore(Number(direct.dataset.chore), Number(direct.dataset.kid), direct.dataset.date);
     }
     const cell = e.target.closest('[data-chore]');
     if (cell) openCellPicker(cell.dataset.chore, cell.dataset.date);
@@ -671,17 +864,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = e.target.closest('[data-kid]');
     if (!btn || !pickCtx) return;
     bootstrap.Modal.getInstance('#cellModal')?.hide();
-    try {
-      const done = await api('/api/completions', {
-        method: 'POST',
-        body: { choreId: pickCtx.choreId, kidId: Number(btn.dataset.kid), date: pickCtx.date },
-      });
-      const kid = state.kids.find((k) => k.id === done.kidId);
-      toast(`${kid?.emoji || '🎉'} ${kid?.name || 'Someone'} got ${done.points} point${done.points > 1 ? 's' : ''}!`);
-      await Promise.all([refreshWeek(), loadKidsTab()]);
-    } catch (err) {
-      toast(err.message, 'danger');
-    }
+    await completeChore(Number(pickCtx.choreId), Number(btn.dataset.kid), pickCtx.date);
   });
 
   // Kids form

@@ -150,13 +150,18 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
 
 /* Chore chart table */
 .chore-table {
-  min-width: 720px;
+  min-width: 560px;
 }
 
-/* Zebra striping: Bootstrap 5.3 paints each cell with --bs-table-bg (opaque),
-   so the tr background alone never shows — style the cells instead */
-.chore-table tbody tr:nth-child(even) > * {
-  background-color: rgba(17, 24, 39, 0.06);
+/* Cells are opaque card-colored (the sticky title column needs that, or the
+   days would show through it while scrolling). Row hover is an inset shadow so
+   it layers over that and over today's tint instead of replacing them. */
+.chore-table {
+  --bs-table-bg: var(--kd-card);
+}
+
+.chore-table tbody tr:not(.group-row) + tr:not(.group-row) > * {
+  border-top: 1px solid rgba(17, 24, 39, 0.06);
 }
 
 .chore-table thead th {
@@ -189,23 +194,57 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
 /* Row hover: only on devices that really hover, so a tap on the family tablet
    doesn't leave a row stuck highlighted. */
 @media (hover: hover) {
-  .chore-table tbody tr:hover > * {
-    background-color: rgba(17, 24, 39, 0.11);
+  .chore-table tbody tr:not(.group-row):hover > * {
+    box-shadow: inset 0 0 0 9999px rgba(17, 24, 39, 0.06);
   }
 }
 
-.chore-table thead .today-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #7c5cd9;
-  margin-left: 4px;
+/* Chart tokens (dark overrides at the bottom) */
+:root {
+  --kd-av-ring: #cbd5e1;
+  --kd-missed: #dc4c64;
+  --kd-missed-bg: #fdecef;
+  --kd-late: #d9a441;
+  --kd-late-bg: #fff4dc;
+  --kd-late-fg: #8a5a00;
+  --kd-card: #fff;
+  --kd-muted: #6b7280;
+  --kd-item-bg: #f8f9fb;
 }
 
+.chore-table thead .day-num {
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+/* Title column stays put while the days scroll sideways on a phone */
+.chore-title-head,
 .chore-title-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--kd-card);
+  min-width: 150px;
+  max-width: 240px;
+  padding-left: 0.75rem !important;
+}
+
+.chore-name {
   font-weight: 700;
-  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.chore-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.scope-icon {
+  color: var(--kd-muted);
+  font-size: 0.8rem;
 }
 
 .chore-pts {
@@ -215,73 +254,359 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   color: #997404;
   border-radius: 10px;
   padding: 1px 8px;
-  margin-left: 6px;
+}
+
+/* "Each kid" / "Shared" section rows */
+.chore-table tbody tr.group-row > th {
+  background: transparent !important;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--kd-muted);
+  padding: 0.9rem 0.75rem 0.3rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* the label pins left while the days scroll underneath it */
+.group-label {
+  position: sticky;
+  left: 0.75rem;
 }
 
 /* Cells */
 .chore-cell {
-  min-width: 76px;
-  padding: 0.35rem 0.4rem !important;
+  min-width: 56px;
+  padding: 0.35rem 0.25rem !important;
+  text-align: center;
 }
 
-.chore-cell .cell-btn {
-  width: 100%;
-  border: 2px dashed #ced4da;
-  border-radius: 12px;
-  background: #f8f9fa;
-  color: transparent;
-  padding: 0.5rem 0.4rem;
-  font-size: 1.05rem;
+.cell-avs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Kid avatars in cells. States: done / todo / late / missed / future. */
+.av {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
   line-height: 1;
-  transition: all 0.15s ease;
+  padding: 0;
+  border: 2px dashed var(--kid-color, var(--kd-av-ring));
+  background: transparent;
+  color: var(--kd-muted);
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+button.av {
   cursor: pointer;
 }
 
-.chore-cell .cell-btn:hover {
+@media (hover: hover) {
+  button.av:hover {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+.av.done {
+  border: 2px solid var(--kid-color);
+  background: var(--kid-color);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.av.todo {
+  opacity: 0.55;
+}
+
+.av.late {
+  border-color: var(--kd-late);
+  background: var(--kd-late-bg);
+}
+
+.av.missed {
+  border: 2px solid var(--kd-missed);
+  background: var(--kd-missed-bg);
+  opacity: 0.85;
+}
+
+.av.future {
+  border-style: dotted;
+  border-color: var(--kd-av-ring);
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+
+/* shared chores: one "+" slot, not a face */
+.av.shared {
+  border-color: var(--kd-av-ring);
+  font-size: 0.85rem;
+}
+
+.av.shared.todo {
+  opacity: 1;
+  color: #7c5cd9;
   border-color: #7c5cd9;
-  background: #efe9ff;
-  transform: scale(1.04);
 }
 
-.chore-cell .cell-btn.done {
-  border-style: solid;
-  border-color: transparent;
+.av.shared.missed {
+  color: var(--kd-missed);
+}
+
+/* Phones: two faces side by side in a day column, and a narrower title column */
+@media (max-width: 576px) {
+  .av {
+    width: 26px;
+    height: 26px;
+    font-size: 0.8rem;
+  }
+
+  .cell-avs {
+    flex-wrap: nowrap;
+  }
+
+  .chore-title-head,
+  .chore-title-cell {
+    min-width: 118px;
+    max-width: 140px;
+  }
+
+  .chore-name {
+    font-size: 0.9rem;
+  }
+}
+
+.av-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--kd-late);
   color: #fff;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-
-.chore-cell .cell-btn.done:hover {
-  filter: brightness(0.92);
-  transform: none;
-}
-
-.chore-cell .cell-btn.done .bi {
-  margin-right: 4px;
-}
-
-/* due_by chores: past the deadline and not everyone's done */
-.chore-cell .cell-btn.overdue {
-  border-color: #d9a441;
-  background: #fff4dc;
-  color: #8a5a00;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.chore-cell .cell-btn.overdue:hover {
-  border-color: #b7831f;
-  background: #ffe9b8;
+  font-size: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .chore-cell .due-tag {
-  font-size: 0.65rem;
+  flex-basis: 100%;
+  font-size: 0.6rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: #9ca3af;
+}
+
+.week-range {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--kd-muted);
+  margin-left: 6px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 0.8rem;
+  color: var(--kd-muted);
+}
+
+.chart-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.av.legend-av {
+  width: 22px;
+  height: 22px;
+  font-size: 0.7rem;
+}
+
+/* ---------- Today board ---------- */
+.view-toggle .btn {
+  font-weight: 700;
+  padding-inline: 1.1rem;
+}
+
+.kid-board {
+  height: 100%;
+  background: var(--kd-card);
+  border-radius: 1rem;
+  border-top: 5px solid var(--kid-color, #9ca3af);
+  box-shadow: 0 2px 10px rgba(17, 24, 39, 0.07);
+  padding: 1rem;
+}
+
+.kid-board-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.kid-board-name {
+  font-weight: 800;
+  font-size: 1.15rem;
+  line-height: 1.1;
+}
+
+.kid-board-status {
+  font-size: 0.85rem;
+  color: var(--kd-muted);
+  font-weight: 600;
+}
+
+.kid-board.all-done .kid-board-status {
+  color: var(--bs-success);
+}
+
+.shared-avatar {
+  background: #9ca3af;
+  font-size: 1.2rem;
+}
+
+.kid-board-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kid-color, #9ca3af) 15%, transparent);
+  overflow: hidden;
+  margin-bottom: 0.8rem;
+}
+
+.kid-board-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--kid-color, #9ca3af);
+  transition: width 0.3s ease;
+}
+
+.board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Each chore is one big tap target */
+.board-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  text-align: left;
+  min-height: 56px;
+  padding: 0.55rem 0.75rem;
+  border: 2px solid transparent;
+  border-radius: 0.8rem;
+  background: var(--kd-item-bg);
+  color: var(--bs-body-color);
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+button.board-item {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  button.board-item:not(.done):hover {
+    border-color: color-mix(in srgb, var(--kid-color, #7c5cd9) 45%, transparent);
+  }
+}
+
+button.board-item:active {
+  transform: scale(0.98);
+}
+
+.board-check {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--kid-color, #9ca3af);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 1.1rem;
+}
+
+.board-item.done .board-check {
+  background: var(--kid-color, var(--bs-success));
+}
+
+.shared-board .board-item.done .board-check {
+  background: var(--bs-success);
+  border-color: var(--bs-success);
+}
+
+.board-item.done .board-title {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  opacity: 0.6;
+}
+
+.board-item.late {
+  background: var(--kd-late-bg);
+  border-color: var(--kd-late);
+}
+
+.board-item.late .board-note {
+  color: var(--kd-late-fg);
+  font-weight: 700;
+}
+
+.board-text {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.board-title {
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.board-note {
+  font-size: 0.78rem;
+  color: var(--kd-muted);
+}
+
+.who-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+
+.board-pts {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: #fff3cd;
+  color: #997404;
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.board-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--kd-muted);
 }
 
 /* Kids */
@@ -300,42 +625,6 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
 .kid-points-badge {
   font-size: 0.8rem;
   font-weight: 700;
-}
-
-/* Today summary chips above the chart */
-.today-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 14px;
-  border-radius: 999px;
-  font-weight: 700;
-  font-size: 0.85rem;
-  border: 2px solid var(--kid-color, #dee2e6);
-  background: color-mix(in srgb, var(--kid-color, #adb5bd) 9%, #fff);
-  color: var(--bs-body-color);
-}
-
-.today-chip .today-dot-kid {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--kid-color, #7c5cd9);
-}
-
-.today-chip .today-chip-count {
-  font-size: 0.75rem;
-  background: color-mix(in srgb, var(--kid-color, #adb5bd) 16%, #fff);
-  padding: 1px 9px;
-  border-radius: 999px;
-}
-
-.today-chip.done {
-  background: color-mix(in srgb, var(--kid-color, #adb5bd) 22%, #fff);
-}
-
-.today-chip.done .bi {
-  font-size: 0.9rem;
 }
 
 /* Pick-kid buttons in modal */
@@ -481,17 +770,13 @@ body[data-bs-theme="dark"] {
   background-color: transparent;
 }
 
-[data-bs-theme="dark"] .chore-table tbody tr:nth-child(even) > * {
-  background-color: rgba(255, 255, 255, 0.07);
+[data-bs-theme="dark"] .chore-table tbody tr:not(.group-row) + tr:not(.group-row) > * {
+  border-top-color: rgba(255, 255, 255, 0.07);
 }
 
 [data-bs-theme="dark"] .chore-table thead th {
   color: #9ca3af;
   border-bottom-color: #374151;
-}
-
-[data-bs-theme="dark"] .chore-table thead .today-dot {
-  background: var(--kd-primary-light);
 }
 
 [data-bs-theme="dark"] .chore-table thead th.today-col {
@@ -503,25 +788,9 @@ body[data-bs-theme="dark"] {
 }
 
 @media (hover: hover) {
-  [data-bs-theme="dark"] .chore-table tbody tr:hover > * {
-    background-color: rgba(255, 255, 255, 0.13);
+  [data-bs-theme="dark"] .chore-table tbody tr:not(.group-row):hover > * {
+    box-shadow: inset 0 0 0 9999px rgba(255, 255, 255, 0.07);
   }
-}
-
-[data-bs-theme="dark"] .chore-cell .cell-btn {
-  border-color: #4b5563;
-  background: #111827;
-}
-
-[data-bs-theme="dark"] .chore-cell .cell-btn:hover {
-  border-color: var(--kd-primary-light);
-  background: #2f2650;
-}
-
-[data-bs-theme="dark"] .chore-cell .cell-btn.overdue {
-  border-color: #b7831f;
-  background: #3a2c0c;
-  color: #ffd27a;
 }
 
 [data-bs-theme="dark"] .pick-kid-btn {
@@ -541,19 +810,6 @@ body[data-bs-theme="dark"] {
 
 [data-bs-theme="dark"] .freq-badge {
   filter: saturate(0.85);
-}
-
-[data-bs-theme="dark"] .today-chip {
-  background: color-mix(in srgb, var(--kid-color, #4b5563) 14%, #1f2937);
-  color: var(--bs-body-color);
-}
-
-[data-bs-theme="dark"] .today-chip .today-chip-count {
-  background: color-mix(in srgb, var(--kid-color, #4b5563) 28%, #1f2937);
-}
-
-[data-bs-theme="dark"] .today-chip.done {
-  background: color-mix(in srgb, var(--kid-color, #4b5563) 26%, #1f2937);
 }
 
 [data-bs-theme="dark"] .badge.text-bg-light {
@@ -583,3 +839,32 @@ body[data-bs-theme="dark"] {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
+[data-bs-theme="dark"] {
+  --kd-av-ring: #4b5563;
+  --kd-missed: #f07288;
+  --kd-missed-bg: #3b1820;
+  --kd-late: #d9a441;
+  --kd-late-bg: #3a2c0c;
+  --kd-late-fg: #ffd27a;
+  --kd-card: #1f2937;
+  --kd-muted: #9ca3af;
+  --kd-item-bg: #111827;
+}
+
+[data-bs-theme="dark"] .chore-table tbody tr.group-row > th {
+  border-bottom-color: #374151;
+}
+
+[data-bs-theme="dark"] .av.shared.todo {
+  color: var(--kd-primary-light);
+  border-color: var(--kd-primary-light);
+}
+
+[data-bs-theme="dark"] .kid-board {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+[data-bs-theme="dark"] .board-pts {
+  background: #423818;
+  color: #facc15;
+}
