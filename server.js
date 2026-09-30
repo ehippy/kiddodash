@@ -455,6 +455,21 @@ function weekBounds(date, startDay = 1) {
   return [fmt(d), fmt(end)];
 }
 
+// Seven days starting on `start` (YYYY-MM-DD), in the same shape as weekDates().
+function weekFrom(start) {
+  const d0 = new Date(start + 'T00:00:00');
+  const p = (n) => String(n).padStart(2, '0');
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(d0);
+    d.setDate(d0.getDate() + i);
+    return {
+      date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+      day: DAYS[d.getDay()],
+      weekdayIndex: d.getDay()
+    };
+  });
+}
+
 function weekDates(offset = 0, startDay = 1) {
   // Week starts on `startDay` (0=Sunday..6=Saturday), offset by whole weeks
   // (negative = past, positive = future).
@@ -549,6 +564,10 @@ app.get('/api/auth/status', (req, res) => {
   if (!session) return res.json({ required: true, session: null });
   if (session.role === 'admin') return res.json({ required: true, session: { role: 'admin' } });
   const kid = prepare('SELECT id, name, color, emoji FROM kids WHERE id = ?').get(session.kidId);
+  if (!kid) {
+    dropSession(session.token); // the kid was deleted out from under this tablet
+    return res.json({ required: true, session: null });
+  }
   res.json({ required: true, session: { role: 'kid', kid } });
 });
 
@@ -607,6 +626,7 @@ app.put('/api/kids/:id/pin', requireAdminOrSelf((req) => Number(req.params.id)),
 
   const pin = String(raw).trim();
   if (!KID_PIN_RE.test(pin)) return sendError(res, 400, 'Kid PIN must be exactly 4 digits');
+  if (!loadAuthSettings().adminPinHash) return sendError(res, 400, NEED_ADMIN_PIN);
   try {
     assertPinUnused(pin, kid.id);
     setKidPin(kid.id, pin);
@@ -617,11 +637,15 @@ app.put('/api/kids/:id/pin', requireAdminOrSelf((req) => Number(req.params.id)),
 });
 
 // PUT /api/auth/admin-pin  { pin }  — change the admin PIN
+// Kid PINs switch sign-in on for everyone, so without a parent PIN nobody could
+// sign in as a parent afterwards.
+const NEED_ADMIN_PIN = 'Set a parent PIN first (Settings → Access), or you’d be locked out of parent mode';
+
 app.put('/api/auth/admin-pin', requireAdmin, (req, res) => {
   const pin = String(req.body?.pin || '').trim();
   if (!ADMIN_PIN_RE.test(pin)) return sendError(res, 400, 'Admin PIN must be 4-8 digits');
   if (KID_PIN_RE.test(pin) && kidByPin(pin)) return sendError(res, 409, 'That PIN belongs to a kid — pick another');
-  if (adminPinMatches(pin)) return sendError(res, 200, { ok: true, note: 'already the current admin PIN' });
+  if (adminPinMatches(pin)) return res.json({ ok: true, note: 'already the current admin PIN' });
   setAdminPin(pin);
   res.json({ ok: true });
 });
@@ -647,6 +671,7 @@ app.post('/api/kids', requireAdmin, (req, res) => {
   if (!name || !String(name).trim()) return sendError(res, 400, 'Name is required');
   const pinStr = pin === undefined || pin === null ? '' : String(pin).trim();
   if (pinStr && !KID_PIN_RE.test(pinStr)) return sendError(res, 400, 'Kid PIN must be exactly 4 digits');
+  if (pinStr && !loadAuthSettings().adminPinHash) return sendError(res, 400, NEED_ADMIN_PIN);
   try {
     const info = prepare('INSERT INTO kids (name, color, emoji) VALUES (?, ?, ?)').run(
       String(name).trim(),
@@ -681,7 +706,10 @@ app.delete('/api/kids/:id', requireAdmin, (req, res) => {
   try {
     // FKs are enforced, so this kid's completions and redemptions cascade away in the
     // same transaction as the kid row itself.
-    const info = inTransaction(() => prepare('DELETE FROM kids WHERE id = ?').run(req.params.id));
+    const info = inTransaction(() => {
+      prepare('DELETE FROM sessions WHERE kid_id = ?').run(req.params.id);
+      return prepare('DELETE FROM kids WHERE id = ?').run(req.params.id);
+    });
     if (info.changes === 0) return sendError(res, 404, 'Kid not found');
     res.json({ ok: true });
   } catch (e) {
@@ -806,6 +834,23 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
   const kid = prepare('SELECT * FROM kids WHERE id = ?').get(kidId);
   if (!kid) return sendError(res, 404, 'Kid not found');
   const doneDate = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : todayStr();
+  // Kids check off today only; filling in other days is a parent's call. ±1 day
+  // of slack because the server clock (often UTC) and the tablet's may disagree.
+  if (getSession(req)?.role === 'kid') {
+    const drift = Math.abs(Date.parse(doneDate + 'T00:00:00Z') - Date.parse(todayStr() + 'T00:00:00Z')) / 86400000;
+    if (drift > 1) return sendError(res, 403, 'Only a parent can fill in other days');
+  }
+  const mineAlready = prepare('SELECT 1 FROM completions WHERE chore_id = ? AND kid_id = ? AND done_date = ?')
+    .get(chore.id, kid.id, doneDate);
+  if ((chore.frequency === 'daily' || chore.frequency === 'weekly') && !mineAlready) {
+    // Shared chore: one kid per day gets the credit. (A repeat by the same kid
+    // falls through to the UNIQUE index and its own 409.)
+    const other = prepare(
+      `SELECT k.name FROM completions c JOIN kids k ON k.id = c.kid_id
+        WHERE c.chore_id = ? AND c.done_date = ? AND c.kid_id != ?`
+    ).get(chore.id, doneDate, kid.id);
+    if (other) return sendError(res, 409, `${other.name} already did this one`);
+  }
   if (chore.frequency === 'due_by') {
     // Once per kid per chart week, on any day; the UNIQUE index only covers one day.
     const [from, to] = weekBounds(doneDate, loadSettings().weekStartDay);
@@ -856,7 +901,11 @@ app.get('/api/week', (req, res) => {
   // All chores (not just active ones) so the admin Chores list can still see and
   // manage paused chores; the chart itself filters to active ones client-side.
   const chores = prepare('SELECT * FROM chores ORDER BY frequency, days, id').all();
-  const week = weekDates(offset, loadSettings().weekStartDay);
+  // Prefer the client's own week start (its local calendar); the server clock
+  // may be UTC and land in the neighbouring week near midnight.
+  const week = /^\d{4}-\d{2}-\d{2}$/.test(req.query.start || '')
+    ? weekFrom(req.query.start)
+    : weekDates(offset, loadSettings().weekStartDay);
   const dates = week.map((w) => w.date);
 
   const rows = prepare(
@@ -929,14 +978,25 @@ app.get('/api/redeemptions', (req, res) => {
   );
 });
 
-// POST /api/redeem  { kidId, reward: { label, points } }
+// POST /api/redeem  { kidId, rewardId }  (admin only: { kidId, reward: { label, points } })
 app.post('/api/redeem', requireAdminOrSelf((req) => {
   const n = Number(req.body?.kidId);
   return Number.isInteger(n) && n > 0 ? n : null;
 }), (req, res) => {
-  const { kidId, reward } = req.body || {};
-  const label = reward && String(reward.label || '').trim();
-  const points = reward && Number(reward.points);
+  const { kidId, rewardId, reward } = req.body || {};
+  // Menu rewards are priced by the server, never by the request. A parent may
+  // also record a one-off spend ({ reward: { label, points } }); kids may not.
+  let label, points;
+  if (rewardId !== undefined) {
+    const item = loadSettings().rewards.find((r) => r.id === Number(rewardId));
+    if (!item) return sendError(res, 404, 'Reward not found');
+    ({ label, points } = item);
+  } else {
+    const session = getSession(req);
+    if (authConfigured() && session?.role !== 'admin') return sendError(res, 400, 'Pick a reward from the menu');
+    label = reward && String(reward.label || '').trim();
+    points = reward && Number(reward.points);
+  }
   if (!label) return sendError(res, 400, 'Reward label is required');
   if (!Number.isInteger(points) || points <= 0) return sendError(res, 400, 'Reward points must be a positive integer');
   const kid = prepare('SELECT * FROM kids WHERE id = ?').get(kidId);
@@ -1002,7 +1062,7 @@ app.put('/api/settings', requireAdmin, (req, res) => {
   if (Array.isArray(body.rewards)) {
     next.rewards = body.rewards
       .filter((r) => r && String(r.label).trim())
-      .map((r) => ({ id: Number(r.id) || Date.now(), label: String(r.label).trim(), points: Number(r.points) || 0 }));
+      .map((r) => ({ id: Number(r.id) || Date.now(), label: String(r.label).trim(), points: Math.max(1, Math.round(Number(r.points)) || 1) }));
   }
   if (body.weekStartDay !== undefined) {
     const wsd = Number(body.weekStartDay);

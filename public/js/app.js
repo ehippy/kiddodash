@@ -40,6 +40,9 @@ async function api(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  // Signed out underneath us (PINs changed, session expired or dropped): re-check
+  // and let the sign-in screen take over instead of failing action after action.
+  if (res.status === 401) refreshAuth().catch(() => {});
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
@@ -163,7 +166,7 @@ function renderChoreDaysPicker(container, idPrefix, freq, selectedDays) {
   const selected = new Set(selectedDays || []);
   if (freq === 'due_by') {
     // One deadline day: radios sharing a name, read back by readChoreDaysPicker.
-    const pick = selected.size ? [...selected][0] : WEEK_ORDER[WEEK_ORDER.length - 1];
+    const pick = selected.size ? [...selected][0] : ((state.settings?.weekStartDay ?? 1) + 6) % 7;
     container.innerHTML = `
       <div class="btn-group btn-group-sm chore-days-picker" role="group">
         ${WEEK_ORDER.map((d) => {
@@ -473,7 +476,8 @@ function avatarHtml(kid, { state: st, completion, date, choreId, late = false })
       : `<span class="av done" style="--kid-color:${esc(c.kidColor)}" title="${title(late ? 'done late' : 'done')}">${esc(c.kidEmoji)}${badge}</span>`;
   }
   const label = { todo: 'to do · tap when done', late: 'late · tap when done', missed: 'missed · tap to fill in', future: 'coming up' }[st];
-  if (st === 'future' || !canActFor(kid.id)) {
+  // Filling in a missed day is a parent's call (the server enforces it too).
+  if (st === 'future' || !canActFor(kid.id) || (st === 'missed' && !isAdmin())) {
     return `<span class="av ${st}" style="--kid-color:${esc(kid.color)}" title="${title(label.split(' · ')[0])}">${esc(kid.emoji)}</span>`;
   }
   return `<button class="av ${st}" style="--kid-color:${esc(kid.color)}" data-complete data-chore="${choreId}" data-kid="${kid.id}" data-date="${date}" title="${title(label)}">${esc(kid.emoji)}</button>`;
@@ -481,7 +485,7 @@ function avatarHtml(kid, { state: st, completion, date, choreId, late = false })
 
 // Same idea for an undone shared chore: a single "+" slot that opens the kid picker.
 function sharedSlotHtml(st, choreId, date) {
-  const canAct = st !== 'future' && (isAdmin() || myKidId() !== null);
+  const canAct = st === 'todo' ? isAdmin() || myKidId() !== null : st === 'missed' && isAdmin();
   const icon = st === 'missed' ? 'x-lg' : 'plus-lg';
   const label = { todo: 'Tap when done', missed: 'Missed · tap to fill in', future: 'Coming up' }[st];
   return canAct
@@ -568,6 +572,8 @@ function loadWeek() {
             : `In ${state.weekOffset} weeks`;
   $('#weekLabel').innerHTML = `${rel} <span class="week-range">${fmt(dates[0])} – ${fmt(dates[6])}</span>`;
   $('#btnToday').disabled = state.weekOffset === 0;
+  $('#btnPrevWeek').disabled = state.weekOffset <= -26;
+  $('#btnNextWeek').disabled = state.weekOffset >= 26;
 
   // Rows — paused chores stay visible in Settings for editing, but never show up
   // on the family's chart. Grouped: each-kid chores, then shared.
@@ -614,8 +620,13 @@ function loadWeek() {
 }
 
 async function refreshWeek() {
-  const reqs = [api('/api/week?offset=' + state.weekOffset), api('/api/totals')];
-  if (state.weekOffset !== 0) reqs.push(api('/api/week?offset=0'));
+  // Settings first: week start and custody can change from another device, and
+  // the week dates below depend on them.
+  state.settings = await api('/api/settings');
+  // Ask for weeks by this device's own start date — the server clock may be UTC.
+  const weekUrl = (offset) => '/api/week?start=' + dateStr(weekDates(offset)[0]);
+  const reqs = [api(weekUrl(state.weekOffset)), api('/api/totals')];
+  if (state.weekOffset !== 0) reqs.push(api(weekUrl(0)));
   const [data, totals, current] = await Promise.all(reqs);
   state.kids = data.kids;
   state.chores = data.chores;
@@ -625,6 +636,10 @@ async function refreshWeek() {
   state.currentGrid = (current || data).grid; // the Today board always shows this week
   state.currentDates = (current || data).week.map((w) => w.date);
   renderChart();
+  if (!$('#pane-general').contains(document.activeElement)) {
+    $('#weekStartDay').value = String(state.settings.weekStartDay ?? 1);
+    renderCustodySettings();
+  }
   loadKidsTab();
   loadChoresTab();
   loadAccessTab(); // Settings is one scrolling page now — keep every section in sync
@@ -784,11 +799,18 @@ function loadChoresTab() {
           <div class="form-check form-switch m-0" title="${c.active ? 'Chore is active' : 'Chore is paused'}">
             <input class="form-check-input" type="checkbox" data-togglechores="${c.id}" ${c.active ? 'checked' : ''}>
           </div>
-          <span class="fw-bold flex-grow-1 ${c.active ? '' : 'text-muted'}">${esc(c.title)}</span>
-          <span class="chore-pts">${c.points} pt${c.points > 1 ? 's' : ''}</span>
-          ${freqBadgeHtml(c)}
-          <button class="btn btn-sm btn-outline-secondary" data-editchore="${c.id}" title="Edit"><i class="bi bi-pencil"></i></button>
-          <button class="btn btn-sm btn-outline-danger" data-delchore="${c.id}" title="Delete"><i class="bi bi-trash"></i></button>
+          <div class="chore-row-text">
+            <div class="fw-bold ${c.active ? '' : 'text-muted'}">${esc(c.title)}</div>
+            <div class="chore-row-meta">
+              <span class="chore-pts">${ptsLabel(c.points)}</span>
+              ${freqBadgeHtml(c)}
+              ${c.active ? '' : '<span class="badge text-bg-light">paused</span>'}
+            </div>
+          </div>
+          <div class="chore-row-actions">
+            <button class="btn btn-sm btn-outline-secondary" data-editchore="${c.id}" title="Edit"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-outline-danger" data-delchore="${c.id}" title="Delete"><i class="bi bi-trash"></i></button>
+          </div>
         </div>
       </li>`
     )
@@ -802,32 +824,42 @@ function loadRewardsTab() {
   if (!s) return;
   const list = $('#rewardsList');
   if (!s.rewards.length) {
-    list.innerHTML = '<div class="empty-state"><i class="bi bi-trophy"></i>No rewards yet — add one!</div>';
+    list.innerHTML = `<div class="empty-state"><i class="bi bi-trophy"></i>No rewards yet${isAdmin() ? ' — add one!' : '.'}</div>`;
     return;
   }
-  const byId = new Map(state.kidTotals.map((t) => [t.id, t]));
-  list.innerHTML = s.rewards
+  const mine = myKidId();
+  const kids = mine === null ? state.kidTotals : state.kidTotals.filter((t) => t.id === mine);
+  const canRedeem = isAdmin() || mine !== null;
+  list.innerHTML = [...s.rewards]
+    .sort((a, b) => a.points - b.points)
     .map((r) => {
-      const mine = myKidId();
-      const eligible = mine === null ? state.kidTotals : state.kidTotals.filter((t) => t.id === mine);
-      const kidOpts = eligible
-        .map((t) => {
-          const can = t.balance >= r.points;
-          return `<option value="${t.id}" ${can ? '' : 'disabled'}>
-            ${esc(t.emoji)} ${esc(t.name)} — ${t.balance} pts${can ? '' : ' (not enough)'}
-          </option>`;
-        })
-        .join('');
-      return `<div class="reward-item d-flex align-items-center gap-2">
-          <i class="bi bi-gift text-primary fs-5"></i>
-          <span class="fw-bold flex-grow-1">${esc(r.label)}</span>
-          <span class="badge text-bg-warning">${r.points} pts</span>
-          <select class="form-select form-select-sm d-none d-sm-inline-block w-auto" data-redeemkid="${r.id}">
-            ${mine === null ? '<option value="">Pick a kid…</option>' : ''}${kidOpts}
-          </select>
-          <button class="btn btn-sm btn-primary" data-redeem="${r.id}" title="Redeem for the selected kid"><i class="bi bi-check-lg me-1"></i>Redeem</button>
-          <button class="btn btn-sm btn-outline-secondary d-none" data-admin-only data-editreward='${esc(JSON.stringify(r))}'><i class="bi bi-pencil"></i></button>
-          <button class="btn btn-sm btn-outline-danger d-none" data-admin-only data-delreward="${r.id}"><i class="bi bi-trash"></i></button>
+      // One button per kid: redeem if they can afford it, otherwise how far off they are.
+      const kidBtns = canRedeem
+        ? kids
+            .map((t) => {
+              const short = r.points - t.balance;
+              return short <= 0
+                ? `<button class="btn btn-sm btn-primary reward-kid" data-redeem="${r.id}" data-kid="${t.id}">
+                    ${esc(t.emoji)} ${esc(t.name)} <i class="bi bi-check-lg ms-1"></i>
+                  </button>`
+                : `<span class="reward-kid reward-short" title="${esc(t.name)} has ${t.balance} pts">
+                    ${esc(t.emoji)} ${esc(t.name)} · ${short} more
+                  </span>`;
+            })
+            .join('')
+        : '';
+      const adminBtns = isAdmin()
+        ? `<button class="btn btn-sm btn-outline-secondary" data-editreward="${r.id}" title="Edit"><i class="bi bi-pencil"></i></button>
+           <button class="btn btn-sm btn-outline-danger" data-delreward="${r.id}" title="Delete"><i class="bi bi-trash"></i></button>`
+        : '';
+      return `<div class="reward-item">
+          <div class="reward-head">
+            <i class="bi bi-gift reward-icon"></i>
+            <span class="reward-label">${esc(r.label)}</span>
+            <span class="badge text-bg-warning reward-cost">${ptsLabel(r.points)}</span>
+            ${adminBtns ? `<span class="reward-admin">${adminBtns}</span>` : ''}
+          </div>
+          ${kidBtns ? `<div class="reward-kids">${kidBtns}</div>` : ''}
         </div>`;
     })
     .join('');
@@ -840,7 +872,6 @@ function renderBalances() {
     list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-people"></i>No kids yet.</li>';
     return;
   }
-  const byId = new Map(state.kidTotals.map((t) => [t.id, t]));
   list.innerHTML = state.kidTotals
     .map((t) => {
       return `<li class="list-group-item">
@@ -871,7 +902,7 @@ function renderRecentSpends() {
         <span class="kid-avatar" style="background:${esc(r.kidColor)};width:28px;height:28px;font-size:0.9rem">${esc(r.kidEmoji)}</span>
         <div class="flex-grow-1">
           <div class="fw-bold">${esc(r.rewardLabel)}</div>
-          <div class="text-muted small">${esc(r.kidName)} · ${new Date(r.createdAt + 'Z').toLocaleDateString()}</div>
+          <div class="text-muted small">${esc(r.kidName)} · ${new Date(r.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString()}</div>
         </div>
         <span class="badge text-bg-warning">−${r.points}</span>
       </li>`
@@ -888,8 +919,8 @@ async function refreshRewards() {
   state.recentSpends = spends;
   renderBalances();
   renderRecentSpends();
-  applyRoleUI(); // reward edit/delete buttons follow the role
-  loadRewardsTab(); // re-render redeem selects with fresh balances
+  loadRewardsTab(); // fresh balances; edit/delete buttons render per role
+  applyRoleUI();
   loadKidsTab(); // kid cards now show balance, not lifetime earned
 }
 
@@ -897,8 +928,8 @@ async function refreshRewards() {
 
 document.addEventListener('DOMContentLoaded', () => {
   // Week navigation
-  $('#btnPrevWeek').addEventListener('click', () => { state.weekOffset--; refreshWeek(); });
-  $('#btnNextWeek').addEventListener('click', () => { state.weekOffset++; refreshWeek(); });
+  $('#btnPrevWeek').addEventListener('click', () => { state.weekOffset = Math.max(-26, state.weekOffset - 1); refreshWeek(); });
+  $('#btnNextWeek').addEventListener('click', () => { state.weekOffset = Math.min(26, state.weekOffset + 1); refreshWeek(); });
   $('#btnToday').addEventListener('click', () => { state.weekOffset = 0; refreshWeek(); });
 
   // Today / Week toggle
@@ -910,7 +941,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#pane-chart').addEventListener('click', async (e) => {
     const undo = e.target.closest('[data-undo]');
     if (undo) {
-      const ok = await confirmDialog(`Undo ${undo.dataset.undoLabel || 'this check'}?`);
+      const ok = await confirmDialog(`Undo ${undo.dataset.undoLabel || 'this check'}?`, { ok: 'Undo', danger: false });
       if (ok) {
         try {
           await api('/api/completions/' + undo.dataset.undo, { method: 'DELETE' });
@@ -953,7 +984,8 @@ document.addEventListener('DOMContentLoaded', () => {
       toast(`${kid.emoji} ${kid.name} added!`);
       $('#kidName').value = '';
       $('#kidPin').value = '';
-      await Promise.all([refreshWeek()]);
+      await refreshAuth();
+      await refreshWeek();
     } catch (err) {
       toast(err.message, 'danger');
     }
@@ -964,12 +996,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const del = e.target.closest('[data-delkid]');
     if (del) {
       const kid = state.kids.find((k) => k.id === Number(del.dataset.delkid));
-      const ok = await confirmDialog(`Remove ${kid?.name}? Their completed chores and points will also be removed.`);
+      const ok = await confirmDialog(`Remove ${kid?.name}? Their completed chores and points will also be removed.`, { ok: 'Remove' });
       if (ok) {
         try {
           await api('/api/kids/' + del.dataset.delkid, { method: 'DELETE' });
           toast('Removed', 'secondary');
-          await Promise.all([refreshWeek()]);
+          await refreshWeek();
         } catch (err) { toast(err.message, 'danger'); }
       }
       return;
@@ -998,7 +1030,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       toast('Chore added');
       $('#choreTitle').value = '';
-      await Promise.all([refreshWeek()]);
+      await refreshWeek();
     } catch (err) { toast(err.message, 'danger'); }
   });
 
@@ -1012,7 +1044,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           await api('/api/chores/' + del.dataset.delchore, { method: 'DELETE' });
           toast('Chore deleted', 'secondary');
-          await Promise.all([refreshWeek()]);
+          await refreshWeek();
         } catch (err) { toast(err.message, 'danger'); }
       }
       return;
@@ -1026,7 +1058,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (toggle) {
       try {
         await api('/api/chores/' + toggle.dataset.togglechores, { method: 'PUT', body: { active: toggle.checked } });
-        await Promise.all([refreshWeek()]);
+        await refreshWeek();
       } catch (err) { toast(err.message, 'danger'); }
     }
   });
@@ -1098,15 +1130,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const redeem = e.target.closest('[data-redeem]');
     if (redeem) {
       const reward = state.settings.rewards.find((r) => r.id === Number(redeem.dataset.redeem));
-      if (!reward) return;
-      const sel = $(`[data-redeemkid="${reward.id}"]`);
-      // A signed-in kid has exactly one option in their picker — use it implicitly.
-      const auto = myKidId() !== null ? myKidId() : 0;
-      const kidId = sel && sel.value ? Number(sel.value) : auto;
-      if (!kidId) return toast('Pick a kid first', 'warning');
+      const kid = state.kidTotals.find((t) => t.id === Number(redeem.dataset.kid));
+      if (!reward || !kid) return;
+      const ok = await confirmDialog(
+        `Spend ${ptsLabel(reward.points)} of ${kid.name}’s ${kid.balance} on “${reward.label}”?`,
+        { ok: 'Redeem', danger: false }
+      );
+      if (!ok) return;
       try {
-        const res = await api('/api/redeem', { method: 'POST', body: { kidId, reward } });
-        toast(`${res.kidEmoji} ${res.kidName} redeemed “${res.rewardLabel}”! (${res.balance} pts left)`);
+        const res = await api('/api/redeem', { method: 'POST', body: { kidId: kid.id, rewardId: reward.id } });
+        toast(`${res.kidEmoji} ${res.kidName} redeemed “${res.rewardLabel}”! (${ptsLabel(res.balance)} left)`);
         await Promise.all([refreshRewards(), refreshWeek()]);
       } catch (err) {
         toast(err.message, 'danger');
@@ -1119,7 +1152,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (ok) {
         try {
           const rewards = state.settings.rewards.filter((r) => r.id !== Number(del.dataset.delreward));
-          await api('/api/settings', { method: 'PUT', body: { rewards } });
+          state.settings = await api('/api/settings', { method: 'PUT', body: { rewards } });
           loadRewardsTab();
           toast('Reward deleted', 'secondary');
         } catch (err) { toast(err.message, 'danger'); }
@@ -1128,7 +1161,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const edit = e.target.closest('[data-editreward]');
     if (edit) {
-      const r = JSON.parse(edit.dataset.editreward);
+      const r = state.settings.rewards.find((x) => x.id === Number(edit.dataset.editreward));
+      if (!r) return;
       $('#rewardId').value = r.id;
       $('#rewardLabel').value = r.label;
       $('#rewardPoints').value = r.points;
@@ -1190,7 +1224,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const id = $('#rewardId').value;
     const rewards = state.settings.rewards.slice();
     const label = $('#rewardLabel').value.trim();
-    const points = Number($('#rewardPoints').value) || 0;
+    const points = Math.round(Number($('#rewardPoints').value));
+    if (!label) return toast('Give the reward a name', 'warning');
+    if (!(points >= 1)) return toast('Points must be at least 1', 'warning');
     if (id) {
       const i = rewards.findIndex((r) => r.id === Number(id));
       if (i >= 0) rewards[i] = { ...rewards[i], label, points };
@@ -1198,7 +1234,7 @@ document.addEventListener('DOMContentLoaded', () => {
       rewards.push({ id: Date.now(), label, points });
     }
     try {
-      await api('/api/settings', { method: 'PUT', body: { rewards } });
+      state.settings = await api('/api/settings', { method: 'PUT', body: { rewards } });
       bootstrap.Modal.getInstance('#rewardModal')?.hide();
       loadRewardsTab();
       toast('Reward saved');
@@ -1271,6 +1307,7 @@ document.addEventListener('DOMContentLoaded', () => {
       await api('/api/auth/admin-pin', { method: 'PUT', body: { pin } });
       $('#adminPinInput').value = '';
       toast('Admin PIN updated');
+      await refreshAuth(); // setting the first PIN turns sign-in on
     } catch (err) { toast(err.message, 'danger'); }
   });
 
@@ -1337,7 +1374,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!kidEditCtx) return;
     const kid = kidEditCtx;
     kidEditModal().hide();
-    const ok = await confirmDialog(`Remove ${kid.name}? Their completed chores and points will also be removed.`);
+    const ok = await confirmDialog(`Remove ${kid.name}? Their completed chores and points will also be removed.`, { ok: 'Remove' });
     if (!ok) return;
     try {
       await api('/api/kids/' + kid.id, { method: 'DELETE' });
@@ -1361,6 +1398,17 @@ document.addEventListener('DOMContentLoaded', () => {
       if (action) action();
     });
   });
+
+  // Keep an always-on tablet current: pick up other devices' check-offs every
+  // minute, and refresh right away when the screen comes back. Skipped while a
+  // dialog is open or the tab is hidden, so nothing moves under someone's finger.
+  const liveRefresh = () => {
+    if (document.visibilityState !== 'visible' || document.querySelector('.modal.show')) return;
+    if (state.authRequired && !state.session) return;
+    refreshWeek().catch(() => {});
+  };
+  setInterval(liveRefresh, 60 * 1000);
+  document.addEventListener('visibilitychange', liveRefresh);
 
   // Initial load — auth first, then settings (the chart's week-start-day
   // lives there), and only then the chart/rewards that depend on it.
@@ -1451,11 +1499,14 @@ const THEMES = [
 /* ============================ Confirm dialog ============================ */
 
 let confirmResolve = null;
-async function confirmDialog(message) {
+async function confirmDialog(message, { ok = 'Delete', danger = true } = {}) {
   $('#confirmModalBody').textContent = message;
+  const btn = $('#confirmOk');
+  btn.textContent = ok;
+  btn.className = `btn btn-sm ${danger ? 'btn-danger' : 'btn-primary'}`;
   return new Promise((resolve) => {
     confirmResolve = resolve;
-    new bootstrap.Modal('#confirmModal').show();
+    bootstrap.Modal.getOrCreateInstance('#confirmModal').show();
   });
 }
 document.addEventListener('DOMContentLoaded', () => {

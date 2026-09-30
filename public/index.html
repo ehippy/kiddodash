@@ -169,7 +169,7 @@
                   <option value="daily">Daily</option>
                   <option value="schooldays">Each kid, school nights</option>
                   <option value="personal">Each kid, daily</option>
-                  <option value="due_by">Each kid, once a week (due by…)</option>
+                  <option value="due_by">Each kid, weekly deadline</option>
                 </select>
                 <div class="input-group input-group-sm flex-shrink-0" style="width:112px">
                   <span class="input-group-text">pts</span>
@@ -344,7 +344,7 @@
         <input type="hidden" id="rewardId">
         <input class="form-control form-control-sm" id="rewardLabel" placeholder="Reward name" required>
         <div class="d-flex gap-2 align-items-center">
-          <input type="number" min="0" class="form-control form-control-sm" id="rewardPoints" placeholder="Points">
+          <input type="number" min="1" max="99999" class="form-control form-control-sm" id="rewardPoints" placeholder="Points">
           <span class="text-muted small">points to redeem</span>
         </div>
         <button class="btn btn-primary btn-sm" type="submit">Save reward</button>
@@ -419,7 +419,7 @@
             <option value="daily">Daily</option>
             <option value="schooldays">Each kid, school nights</option>
             <option value="personal">Each kid, daily</option>
-            <option value="due_by">Each kid, once a week (due by…)</option>
+            <option value="due_by">Each kid, weekly deadline</option>
           </select>
           <div class="input-group input-group-sm flex-shrink-0" style="width:112px">
             <span class="input-group-text">pts</span>

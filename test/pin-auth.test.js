@@ -178,11 +178,20 @@ test('kid redeems own reward only; admin redeems anyone', async () => {
   const redeemSelf = await fetch(`${s.base}/api/redeem`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...bearer(kid.token) },
-    body: JSON.stringify({ kidId: 1, reward: { label: 'Treat', points: 1 } }),
+    body: JSON.stringify({ kidId: 1, rewardId: 1 }),
   });
   assert.equal(redeemSelf.status, 400, 'past auth, blocked on balance');
   const redeemBody = await redeemSelf.json();
   assert.match(redeemBody.error, /0 points/);
+
+  // Kids can't name their own price: a custom reward is parent-only.
+  const cheap = await fetch(`${s.base}/api/redeem`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...bearer(kid.token) },
+    body: JSON.stringify({ kidId: 1, reward: { label: 'Movie night', points: 0 } }),
+  });
+  assert.equal(cheap.status, 400);
+  assert.match((await cheap.json()).error, /from the menu/);
 
   const adminRedeem = await fetch(`${s.base}/api/redeem`, {
     method: 'POST',
