@@ -135,3 +135,48 @@ test('anytime jobs rest for their cooldown, for everyone', async (t) => {
   assert.equal(g.lastDone, '2024-05-31');
   assert.equal(g.cooldownDays, 30);
 });
+
+test('the activity ledger records check-offs, undos and spends, and who logged them', async (t) => {
+  const f = await bootFamily();
+  t.after(() => f.srv.stop());
+  const kid = f.as(await f.login('1111')); // Ada
+  const mine = await kid('POST', '/api/completions', { choreId: f.reading.id, kidId: f.ada.id, date: today() });
+  await f.admin('POST', '/api/completions', { choreId: f.dishes.id, kidIds: [f.ada.id, f.bo.id], date: '2024-05-01' });
+  await kid('DELETE', `/api/completions/${mine.body.id}`);
+  await f.admin('POST', '/api/completions', { choreId: f.reading.id, kidId: f.bo.id, date: '2024-05-01' });
+  await f.admin('POST', '/api/redeem', { kidId: f.bo.id, reward: { label: 'Sticker', points: 2 } });
+
+  const log = (await f.admin('GET', '/api/activity')).body;
+  const brief = log.map((r) => [r.action, r.kidName, r.subject, r.points, r.actor, r.actorName, r.note]);
+  assert.deepEqual(brief.reverse(), [
+    ['done', 'Ada', 'Reading', 3, 'kid', 'Ada', null],
+    ['done', 'Ada', 'Dishes', 3, 'parent', null, 'team with Bo'],
+    ['done', 'Bo', 'Dishes', 2, 'parent', null, 'team with Ada'],
+    ['undo', 'Ada', 'Reading', -3, 'kid', 'Ada', null],
+    ['done', 'Bo', 'Reading', 3, 'parent', null, null],
+    ['redeem', 'Bo', 'Sticker', -2, 'parent', null, 'custom spend'],
+  ]);
+  assert.equal(log.find((r) => r.subject === 'Dishes').forDate, '2024-05-01');
+
+  // Filters, and parents only.
+  assert.equal((await f.admin('GET', `/api/activity?kidId=${f.bo.id}&action=done`)).body.length, 2);
+  assert.equal((await kid('GET', '/api/activity')).status, 401);
+  // History survives deleting the kid.
+  await f.admin('DELETE', `/api/kids/${f.bo.id}`);
+  assert.equal((await f.admin('GET', '/api/activity')).body.filter((r) => r.kidName === 'Bo').length, 3);
+});
+
+test('the ledger is seeded once from existing history', async (t) => {
+  const srv = await bootServer();
+  const kid = await srv.api('POST', '/api/kids', { name: 'Ada' });
+  const chore = await srv.api('POST', '/api/chores', { title: 'Dishes', frequency: 'daily', points: 5 });
+  await srv.api('POST', '/api/completions', { choreId: chore.body.id, kidId: kid.body.id, date: '2024-05-01' });
+  // Simulate a database from before the ledger: wipe it, then reboot.
+  srv.seed('DELETE FROM activity');
+  await srv.stop();
+  const again = await bootServer({ dataDir: srv.dataDir });
+  t.after(() => again.stop());
+  assert.match(again.logsJoined(), /activity ledger: seeded 1 past entries/);
+  const log = (await again.api('GET', '/api/activity')).body;
+  assert.deepEqual(log.map((r) => [r.action, r.kidName, r.subject, r.points, r.actor]), [['done', 'Ada', 'Dishes', 5, null]]);
+});

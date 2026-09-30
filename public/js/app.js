@@ -239,11 +239,12 @@ function applyRoleUI() {
   const kid = myKidId();
   // Admin-only tabs
   $('#tab-settings').classList.toggle('d-none', !admin);
+  $('#tab-activity').classList.toggle('d-none', !admin);
   // Anything marked admin-only (reward edit/delete)
   document.querySelectorAll('[data-admin-only]').forEach((el) => {
     el.classList.toggle('d-none', !admin);
   });
-  if (!admin && $('#pane-settings').classList.contains('show')) {
+  if (!admin && ($('#pane-settings').classList.contains('show') || $('#pane-activity').classList.contains('show'))) {
     bootstrap.Tab.getOrCreateInstance($('#tab-chart')).show();
   }
   // Rewards: kids redeem only their own — hide other kids in the pickers
@@ -753,6 +754,117 @@ function renderPickState() {
 // Context for the cell being picked (chore + date)
 let pickCtx = null;
 
+/* ============================ Activity ledger ============================ */
+
+let activityRows = [];
+
+const atDate = (at) => new Date(at.replace(' ', 'T') + 'Z'); // ledger times are UTC
+
+async function loadActivity() {
+  const kidSel = $('#actKid');
+  const picked = kidSel.value;
+  kidSel.innerHTML = '<option value="">All kids</option>' +
+    state.kids.map((k) => `<option value="${k.id}">${esc(k.emoji)} ${esc(k.name)}</option>`).join('');
+  kidSel.value = picked;
+  const q = new URLSearchParams({ days: $('#actDays').value, kidId: kidSel.value, action: $('#actType').value });
+  try {
+    activityRows = await api('/api/activity?' + q);
+  } catch (err) {
+    $('#actList').innerHTML = `<div class="empty-state">${esc(err.message)}</div>`;
+    return;
+  }
+  renderActivitySummary();
+  renderActivityList();
+}
+
+function renderActivitySummary() {
+  const byKid = new Map();
+  for (const r of activityRows) {
+    const t = byKid.get(r.kidName) || { earned: 0, undone: 0, spent: 0, filled: 0 };
+    if (r.action === 'done') t.earned += r.points;
+    if (r.action === 'undo') t.undone -= r.points;
+    if (r.action === 'redeem') t.spent -= r.points;
+    if (r.action === 'done' && r.forDate && r.forDate !== dateStr(atDate(r.at))) t.filled++;
+    byKid.set(r.kidName, t);
+  }
+  $('#actSummary').innerHTML = [...byKid]
+    .map(([name, t]) => {
+      const kid = state.kids.find((k) => k.name === name);
+      return `<div class="col-6 col-md-4 col-xl-3"><div class="act-sum" style="--kid-color:${esc(kid?.color || '#9ca3af')}">
+          <div class="act-sum-name">${esc(kid?.emoji || '')} ${esc(name || '?')}</div>
+          <div class="act-sum-line"><span>Earned</span><strong class="text-success">+${t.earned}</strong></div>
+          <div class="act-sum-line"><span>Undone</span><strong>${t.undone ? '−' + t.undone : 0}</strong></div>
+          <div class="act-sum-line"><span>Spent</span><strong class="text-danger">${t.spent ? '−' + t.spent : 0}</strong></div>
+          ${t.filled ? `<div class="act-sum-line"><span>Logged on another day</span><strong>${t.filled}</strong></div>` : ''}
+        </div></div>`;
+    })
+    .join('');
+}
+
+function activityWho(r) {
+  if (r.actor === 'parent') return 'logged by a parent';
+  if (r.actor === 'kid') return `logged by ${r.actorName || 'a kid'}`;
+  if (r.actor === 'open') return 'logged with no sign-in';
+  return 'from before the ledger';
+}
+
+function renderActivityList() {
+  const list = $('#actList');
+  if (!activityRows.length) {
+    list.innerHTML = '<div class="empty-state"><i class="bi bi-journal"></i>Nothing in this range.</div>';
+    return;
+  }
+  const today = dateStr(new Date());
+  const yesterday = dateStr(new Date(Date.now() - 86400000));
+  let lastDay = null;
+  const html = [];
+  for (const r of activityRows) {
+    const when = atDate(r.at);
+    const day = dateStr(when);
+    if (day !== lastDay) {
+      lastDay = day;
+      html.push(`<div class="act-day">${day === today ? 'Today' : day === yesterday ? 'Yesterday' : esc(fmtDay(day))}</div>`);
+    }
+    const kid = state.kids.find((k) => k.id === r.kidId);
+    const icon = { done: 'check-circle-fill text-success', undo: 'arrow-counterclockwise act-undo-icon', redeem: 'gift-fill text-danger' }[r.action];
+    const verb = { done: '', undo: 'Undid ', redeem: 'Redeemed ' }[r.action];
+    const tags = [];
+    // Logged on a different day than it counts for: late (filled in) or ahead of time.
+    if (r.forDate && r.forDate !== day && r.action === 'done') {
+      tags.push(`<span class="act-tag warn">${r.forDate < day ? 'filled in' : 'early'} · for ${esc(fmtDay(r.forDate))}</span>`);
+    } else if (r.forDate && r.forDate !== day) {
+      tags.push(`<span class="act-tag">for ${esc(fmtDay(r.forDate))}</span>`);
+    }
+    if (r.note) tags.push(`<span class="act-tag">${esc(r.note)}</span>`);
+    html.push(`<div class="act-row act-${r.action}">
+        <span class="act-time">${when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+        <i class="bi bi-${icon} act-icon"></i>
+        <div class="act-main">
+          <div><span class="who-dot" style="background:${esc(kid?.color || '#9ca3af')}"></span><strong>${esc(r.kidName || '?')}</strong> · ${verb}${esc(r.subject || '')}</div>
+          <div class="act-meta">${esc(activityWho(r))}${tags.length ? ' ' + tags.join(' ') : ''}</div>
+        </div>
+        <span class="act-pts ${r.points >= 0 ? 'plus' : 'minus'}">${r.points >= 0 ? '+' : '−'}${Math.abs(r.points)}</span>
+      </div>`);
+  }
+  if (activityRows.length === 2000) html.push('<div class="act-day">Showing the newest 2000 — narrow the range to see more</div>');
+  list.innerHTML = html.join('');
+}
+
+function downloadActivityCsv() {
+  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [['when', 'action', 'kid', 'item', 'points', 'counts for', 'logged by', 'note'].map(cell).join(',')];
+  for (const r of activityRows) {
+    const w = atDate(r.at);
+    lines.push([`${dateStr(w)} ${w.toTimeString().slice(0, 5)}`, r.action, r.kidName, r.subject, r.points, r.forDate, activityWho(r), r.note].map(cell).join(','));
+  }
+  const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: `kiddodash-activity-${dateStr(new Date())}.csv` });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* ============================ Custody settings ============================ */
 
 function renderCustodySettings() {
@@ -1247,6 +1359,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
+  // ---- Activity ledger ----
+  ['#actKid', '#actDays', '#actType'].forEach((sel) => $(sel).addEventListener('change', loadActivity));
+  $('#actCsv').addEventListener('click', downloadActivityCsv);
+
   // ---- Custody schedule ----
   const saveCustody = async (patch, msg) => {
     const current = state.settings.custody || { enabled: false, homeStart: null, exceptions: {} };
@@ -1456,7 +1572,15 @@ document.addEventListener('DOMContentLoaded', () => {
     '#pane-chart': () => refreshWeek(),
     '#pane-settings': () => refreshWeek(), // one scrolling page: Kids/Chores/General/Access all refresh together
     '#pane-rewards': () => refreshRewards(),
+    '#pane-activity': () => loadActivity(),
   };
+  // A hash change without a reload (a pasted link, Back) switches tabs too.
+  window.addEventListener('hashchange', () => {
+    const tab = document.getElementById('tab-' + (location.hash.slice(1) || 'chart'));
+    if (tab && tab.matches('[data-bs-toggle="pill"]') && !tab.classList.contains('d-none')) {
+      bootstrap.Tab.getOrCreateInstance(tab).show();
+    }
+  });
   document.querySelectorAll('[data-bs-toggle="pill"]').forEach((btn) => {
     btn.addEventListener('shown.bs.tab', () => {
       const name = btn.dataset.bsTarget.replace('#pane-', '');

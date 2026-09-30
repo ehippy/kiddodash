@@ -71,6 +71,24 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_redemptions_kid ON redemptions(kid_id);
 
+  -- Append-only ledger for parents: every check-off, undo and redemption, with
+  -- who it was for and who logged it. Names/titles are copied in as text and
+  -- there are no FKs, so history survives deleting a kid, chore or reward.
+  CREATE TABLE IF NOT EXISTS activity (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          TEXT NOT NULL DEFAULT (datetime('now')), -- UTC
+    action      TEXT NOT NULL CHECK (action IN ('done', 'undo', 'redeem')),
+    kid_id      INTEGER,
+    kid_name    TEXT,
+    subject     TEXT,     -- chore title or reward label
+    points      INTEGER,  -- signed: + earned, - undone or spent
+    for_date    TEXT,     -- the day a check-off counts for
+    actor       TEXT,     -- 'parent' | 'kid' | 'open' (no PINs set) | NULL (before the ledger)
+    actor_name  TEXT,
+    note        TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
+
   CREATE TABLE IF NOT EXISTS sessions (
     token   TEXT PRIMARY KEY,
     role    TEXT NOT NULL,
@@ -86,6 +104,22 @@ db.exec(`
 function tableSql(name) {
   const row = db.prepare('SELECT sql FROM sqlite_master WHERE type = ? AND name = ?').get('table', name);
   return row ? row.sql : null;
+}
+
+// The ledger starts with history: seed it once from existing check-offs and
+// redemptions (who logged them was never recorded, so actor stays NULL).
+function backfillActivity() {
+  if (db.prepare('SELECT COUNT(*) AS n FROM activity').get().n > 0) return;
+  const info = db.prepare(
+    `INSERT INTO activity (at, action, kid_id, kid_name, subject, points, for_date)
+       SELECT c.created_at, 'done', c.kid_id, k.name, ch.title, c.points, c.done_date
+         FROM completions c JOIN kids k ON k.id = c.kid_id JOIN chores ch ON ch.id = c.chore_id
+       UNION ALL
+       SELECT r.created_at, 'redeem', r.kid_id, k.name, r.reward_label, -r.points, NULL
+         FROM redemptions r JOIN kids k ON k.id = r.kid_id
+       ORDER BY 1`
+  ).run();
+  if (info.changes) console.log(`activity ledger: seeded ${info.changes} past entries`);
 }
 
 function migrate() {
@@ -258,6 +292,7 @@ function cleanUpOrphans() {
 }
 
 migrate();
+backfillActivity();
 
 // ---------------------------------------------------------------------------
 // Settings (rewards)
@@ -861,6 +896,23 @@ app.get('/api/completions', (req, res) => {
 });
 
 // POST /api/completions  { choreId, kidId, date? }
+// Who is doing this, for the ledger.
+function actorOf(req) {
+  if (!authConfigured()) return { actor: 'open', actorName: null };
+  const s = getSession(req);
+  if (s?.role === 'admin') return { actor: 'parent', actorName: null };
+  const kid = s?.kidId && prepare('SELECT name FROM kids WHERE id = ?').get(s.kidId);
+  return { actor: 'kid', actorName: kid?.name || null };
+}
+
+function logActivity(req, { action, kidId, kidName, subject, points, forDate = null, note = null }) {
+  const { actor, actorName } = actorOf(req);
+  prepare(
+    `INSERT INTO activity (action, kid_id, kid_name, subject, points, for_date, actor, actor_name, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(action, kidId, kidName, subject, points, forDate, actor, actorName, note);
+}
+
 // { kidId } or { kidIds: [...] } -> distinct positive ints
 function teamIds(body) {
   const raw = Array.isArray(body?.kidIds) ? body.kidIds : [body?.kidId];
@@ -936,6 +988,11 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
         const info = prepare(
           `INSERT INTO completions (chore_id, kid_id, done_date, points) VALUES (?, ?, ?, ?)`
         ).run(chore.id, kid.id, doneDate, points);
+        const mates = kids.filter((k) => k.id !== kid.id).map((k) => k.name);
+        logActivity(req, {
+          action: 'done', kidId: kid.id, kidName: kid.name, subject: chore.title, points, forDate: doneDate,
+          note: mates.length ? `team with ${mates.join(' & ')}` : null,
+        });
         return { id: info.lastInsertRowid, kidId: kid.id, points };
       })
     );
@@ -950,8 +1007,17 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
 
 // DELETE /api/completions/:id
 app.delete('/api/completions/:id', requireAdminOrSelf(completionKidId), (req, res) => {
-  const info = prepare('DELETE FROM completions WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) return sendError(res, 404, 'Completion not found');
+  const row = prepare(
+    `SELECT c.*, k.name AS kid_name, ch.title FROM completions c
+       JOIN kids k ON k.id = c.kid_id JOIN chores ch ON ch.id = c.chore_id WHERE c.id = ?`
+  ).get(req.params.id);
+  if (!row) return sendError(res, 404, 'Completion not found');
+  inTransaction(() => {
+    prepare('DELETE FROM completions WHERE id = ?').run(row.id);
+    logActivity(req, {
+      action: 'undo', kidId: row.kid_id, kidName: row.kid_name, subject: row.title, points: -row.points, forDate: row.done_date,
+    });
+  });
   res.json({ ok: true });
 });
 
@@ -1025,6 +1091,26 @@ app.get('/api/week', (req, res) => {
   });
 });
 
+// --- Activity ledger (parents) --------------------------------------------------
+
+// GET /api/activity?days=30&kidId=&action=  -> newest first (max 2000 rows)
+app.get('/api/activity', requireAdmin, (req, res) => {
+  const where = [];
+  const args = [];
+  const days = parseInt(req.query.days, 10);
+  if (days > 0) { where.push(`at >= datetime('now', ?)`); args.push(`-${days} days`); }
+  const kidId = parseInt(req.query.kidId, 10);
+  if (kidId > 0) { where.push('kid_id = ?'); args.push(kidId); }
+  if (['done', 'undo', 'redeem'].includes(req.query.action)) { where.push('action = ?'); args.push(req.query.action); }
+  const rows = prepare(
+    `SELECT * FROM activity ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC, id DESC LIMIT 2000`
+  ).all(...args);
+  res.json(rows.map((r) => ({
+    id: r.id, at: r.at, action: r.action, kidId: r.kid_id, kidName: r.kid_name, subject: r.subject,
+    points: r.points, forDate: r.for_date, actor: r.actor, actorName: r.actor_name, note: r.note,
+  })));
+});
+
 // --- Redemptions ------------------------------------------------------------------
 
 function earnedTotals() {
@@ -1086,9 +1172,14 @@ app.post('/api/redeem', requireAdminOrSelf((req) => {
   const balance = earned - spent;
   if (balance < points) return sendError(res, 400, `${kid.name} only has ${balance} point${balance === 1 ? '' : 's'}`);
   try {
-    const info = prepare(
-      'INSERT INTO redemptions (kid_id, reward_label, points) VALUES (?, ?, ?)'
-    ).run(kid.id, label, points);
+    const info = inTransaction(() => {
+      const r = prepare('INSERT INTO redemptions (kid_id, reward_label, points) VALUES (?, ?, ?)').run(kid.id, label, points);
+      logActivity(req, {
+        action: 'redeem', kidId: kid.id, kidName: kid.name, subject: label, points: -points,
+        note: rewardId === undefined ? 'custom spend' : null,
+      });
+      return r;
+    });
     res.status(201).json({
       id: info.lastInsertRowid,
       kidId: kid.id,
