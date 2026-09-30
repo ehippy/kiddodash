@@ -9,7 +9,9 @@ const state = {
   kidTotals: [], // from /api/totals: earned, spent, balance
   recentSpends: [], // from /api/redeemptions
   weekOffset: 0, // 0 = current week
-  chartView: (() => { try { return localStorage.getItem('kiddodash-view') === 'week' ? 'week' : 'today'; } catch { return 'today'; } })(),
+  // A #week… URL wins; otherwise this device's last choice.
+  chartView: /^#week/.test(location.hash) ? 'week' : location.hash ? 'today'
+    : (() => { try { return localStorage.getItem('kiddodash-view') === 'week' ? 'week' : 'today'; } catch { return 'today'; } })(),
   authRequired: false, // true once any PIN is configured server-side
   session: null, // { role: 'admin' } | { role: 'kid', kid: {...} } | null
 };
@@ -349,8 +351,94 @@ const scopeIcon = (chore) =>
 function setChartView(view) {
   state.chartView = view;
   try { localStorage.setItem('kiddodash-view', view); } catch { /* storage unavailable */ }
-  renderChart();
+  // Today's URL has no week in it, so leaving a paged week goes back to this one.
+  const paged = view === 'today' && state.weekOffset !== 0;
+  if (paged) state.weekOffset = 0;
+  syncUrl();
+  paged ? refreshWeek() : renderChart();
 }
+
+/* ---------- URL & history ---------- */
+
+// Every screen has its own URL, so Back/Forward, refresh and links all work:
+//   (no hash) Today · #week · #week-1, #week+2 (paged weeks) · #rewards · #activity · #settings
+const TABS = ['chart', 'rewards', 'activity', 'settings'];
+
+function parseRoute(hash) {
+  const h = hash.replace(/^#/, '');
+  const week = /^week([+-]\d+)?$/.exec(h);
+  if (week) return { tab: 'chart', view: 'week', offset: Math.max(-26, Math.min(26, Number(week[1] || 0))) };
+  if (h && h !== 'chart' && TABS.includes(h)) return { tab: h };
+  return { tab: 'chart', view: 'today', offset: 0 };
+}
+
+function routeHash() {
+  const tab = document.querySelector('.nav-link.active[data-bs-toggle="pill"]')?.id.replace('tab-', '') || 'chart';
+  if (tab !== 'chart') return '#' + tab;
+  if (state.chartView !== 'week') return '';
+  const o = state.weekOffset;
+  return '#week' + (o > 0 ? '+' + o : o < 0 ? String(o) : '');
+}
+
+// Called after the user moves to another screen: records it as a history entry.
+function syncUrl(replace = false) {
+  const hash = routeHash();
+  if (hash === location.hash) return;
+  const url = location.pathname + location.search + hash;
+  if (replace) history.replaceState(null, '', url);
+  else history.pushState(null, '', url);
+}
+
+// Show the screen a URL names (Back/Forward, a pasted link, first load).
+function applyRoute(hash) {
+  let route = parseRoute(hash);
+  let tab = document.getElementById('tab-' + route.tab);
+  if (tab.classList.contains('d-none')) { // hidden for this role (Settings for kids)
+    route = parseRoute('');
+    tab = $('#tab-chart');
+  }
+  if (route.tab === 'chart') {
+    const weekChanged = route.offset !== state.weekOffset;
+    state.chartView = route.view;
+    state.weekOffset = route.offset;
+    if (tab.classList.contains('active')) weekChanged ? refreshWeek() : renderChart();
+  }
+  if (!tab.classList.contains('active')) bootstrap.Tab.getOrCreateInstance(tab).show();
+  syncUrl(true); // tidy the URL if it named something we couldn't show
+}
+
+// Open dialogs get a history entry too, so Back (a phone's especially) closes
+// the dialog instead of leaving the screen. Closing a dialog any other way
+// steps back over its entry.
+let ownBackInFlight = false; // our own history.back() hasn't landed yet
+let dialogWaiting = null; // a dialog opened meanwhile; it gets its entry once it lands
+document.addEventListener('show.bs.modal', (e) => {
+  if (ownBackInFlight) dialogWaiting = e.target.id;
+  else if (history.state?.modal) history.replaceState({ modal: e.target.id }, ''); // one dialog swapped for the next
+  else history.pushState({ modal: e.target.id }, '');
+});
+document.addEventListener('hidden.bs.modal', (e) => {
+  if (dialogWaiting === e.target.id) dialogWaiting = null;
+  if (history.state?.modal !== e.target.id) return;
+  ownBackInFlight = true;
+  history.back();
+});
+window.addEventListener('popstate', () => {
+  if (ownBackInFlight) {
+    ownBackInFlight = false;
+    if (dialogWaiting) history.pushState({ modal: dialogWaiting }, '');
+    dialogWaiting = null;
+    return;
+  }
+  const open = document.querySelector('.modal.show');
+  if (history.state?.modal) {
+    // Forward onto a dialog that's since been closed: nothing to show, keep going back.
+    if (!open) { ownBackInFlight = true; history.back(); }
+    return;
+  }
+  if (open) bootstrap.Modal.getInstance(open)?.hide();
+  applyRoute(location.hash);
+});
 
 function renderChart() {
   const week = state.chartView === 'week';
@@ -1177,9 +1265,9 @@ async function refreshRewards() {
 
 document.addEventListener('DOMContentLoaded', () => {
   // Week navigation
-  $('#btnPrevWeek').addEventListener('click', () => { state.weekOffset = Math.max(-26, state.weekOffset - 1); refreshWeek(); });
-  $('#btnNextWeek').addEventListener('click', () => { state.weekOffset = Math.min(26, state.weekOffset + 1); refreshWeek(); });
-  $('#btnToday').addEventListener('click', () => { state.weekOffset = 0; refreshWeek(); });
+  $('#btnPrevWeek').addEventListener('click', () => { state.weekOffset = Math.max(-26, state.weekOffset - 1); syncUrl(); refreshWeek(); });
+  $('#btnNextWeek').addEventListener('click', () => { state.weekOffset = Math.min(26, state.weekOffset + 1); syncUrl(); refreshWeek(); });
+  $('#btnToday').addEventListener('click', () => { state.weekOffset = 0; syncUrl(); refreshWeek(); });
 
   // Today / Week toggle
   $('#viewToday').addEventListener('change', () => setChartView('today'));
@@ -1707,25 +1795,16 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
-  // Tab switching refresh. The open tab also goes in the URL hash (#rewards,
-  // #settings) so a page refresh comes back to it instead of the chart.
+  // Tab switching refresh, and a history entry for the new tab (see syncUrl).
   const tabActions = {
     '#pane-chart': () => refreshWeek(),
     '#pane-settings': () => refreshWeek(), // one scrolling page: Kids/Chores/General/Access all refresh together
     '#pane-rewards': () => refreshRewards(),
     '#pane-activity': () => loadActivity(),
   };
-  // A hash change without a reload (a pasted link, Back) switches tabs too.
-  window.addEventListener('hashchange', () => {
-    const tab = document.getElementById('tab-' + (location.hash.slice(1) || 'chart'));
-    if (tab && tab.matches('[data-bs-toggle="pill"]') && !tab.classList.contains('d-none')) {
-      bootstrap.Tab.getOrCreateInstance(tab).show();
-    }
-  });
   document.querySelectorAll('[data-bs-toggle="pill"]').forEach((btn) => {
     btn.addEventListener('shown.bs.tab', () => {
-      const name = btn.dataset.bsTarget.replace('#pane-', '');
-      history.replaceState(null, '', name === 'chart' ? location.pathname + location.search : '#' + name);
+      syncUrl();
       const action = tabActions[btn.dataset.bsTarget];
       if (action) action();
     });
@@ -1755,11 +1834,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return Promise.all([refreshWeek(), refreshRewards()]);
     })
     .then(() => {
-      // Reopen the tab named in the hash, unless it's hidden for this role (Settings for kids).
-      const tab = document.getElementById('tab-' + location.hash.slice(1));
-      if (tab && tab.matches('[data-bs-toggle="pill"]') && !tab.classList.contains('d-none')) {
-        bootstrap.Tab.getOrCreateInstance(tab).show();
-      }
+      // Open the screen the URL names; a reload mid-dialog leaves a stale dialog entry.
+      if (history.state?.modal) history.replaceState(null, '', location.href);
+      applyRoute(location.hash || routeHash());
     })
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));
 });
