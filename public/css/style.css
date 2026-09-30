@@ -1093,3 +1093,35 @@ button.board-item:active {
   color: var(--kd-muted);
   text-align: center;
 }
+
+/* Team picker: tap kids to toggle them onto the team */
+.pick-kid-btn .pick-check {
+  color: var(--kid-color);
+  font-size: 1.3rem;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.pick-kid-btn.picked {
+  border-color: var(--kid-color);
+  background: color-mix(in srgb, var(--kid-color) 12%, var(--kd-card));
+}
+
+.pick-kid-btn.picked .pick-check {
+  opacity: 1;
+}
+
+.pick-kid-btn[data-locked] {
+  cursor: default;
+}
+
+/* Bonus job on cooldown */
+.board-item.resting {
+  opacity: 0.6;
+}
+
+.board-item.resting .board-check {
+  border-style: dashed;
+  color: var(--kd-muted);
+  font-size: 0.9rem;
+}

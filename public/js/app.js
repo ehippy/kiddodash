@@ -139,7 +139,23 @@ function nextSwitch(ds, away) {
 const fmtDay = (ds) =>
   new Date(ds + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
+// Cooldown choices for anytime jobs (days), and how to say them.
+const COOLDOWNS = [[1, 'once a day'], [7, 'once a week'], [14, 'every 2 weeks'], [30, 'once a month'], [90, 'every 3 months']];
+const cooldownText = (n) => COOLDOWNS.find(([d]) => d === n)?.[1] || `every ${n} days`;
+
+// Anytime jobs: the day this job is available again, or null if it is now.
+function restingUntil(chore, today) {
+  if (chore.frequency !== 'anytime' || !chore.lastDone || !chore.cooldownDays) return null;
+  const d = new Date(chore.lastDone + 'T00:00:00');
+  d.setDate(d.getDate() + chore.cooldownDays);
+  const next = dateStr(d);
+  return next > today ? next : null;
+}
+
 function freqBadgeHtml(chore) {
+  if (chore.frequency === 'anytime') {
+    return `<span class="badge text-bg-success freq-badge">anytime · ${esc(cooldownText(chore.cooldownDays))}</span>`;
+  }
   if (chore.frequency === 'due_by') {
     return `<span class="badge text-bg-primary freq-badge">each kid, by ${DAY_NAMES[chore.days?.[0]] ?? '?'}</span>`;
   }
@@ -158,7 +174,18 @@ function freqBadgeHtml(chore) {
 // too), personal can mean every day (none picked) or specific days, daily/
 // schooldays have no day concept at all. Shared by the add-chore form and the
 // edit modal via a distinct `idPrefix` so their checkbox ids never collide.
-function renderChoreDaysPicker(container, idPrefix, freq, selectedDays) {
+function renderChoreDaysPicker(container, idPrefix, freq, selectedDays, cooldownDays = 7) {
+  if (freq === 'anytime') {
+    // No days: a bonus job can happen any time, then rests for a while.
+    container.innerHTML = `
+      <label class="form-label small fw-bold mb-1" for="${idPrefix}-cooldown">At most</label>
+      <select class="form-select form-select-sm" id="${idPrefix}-cooldown" data-cooldown style="max-width:200px">
+        ${COOLDOWNS.map(([d, label]) => `<option value="${d}"${d === cooldownDays ? ' selected' : ''}>${label}</option>`).join('')}
+      </select>
+      <div class="form-text">Never due or missed. Once someone does it, it rests for everyone until then.</div>
+    `;
+    return;
+  }
   if (freq === 'daily' || freq === 'schooldays') {
     container.innerHTML = '';
     return;
@@ -194,6 +221,8 @@ function renderChoreDaysPicker(container, idPrefix, freq, selectedDays) {
 function readChoreDaysPicker(container) {
   return Array.from(container.querySelectorAll('input:checked')).map((el) => Number(el.value));
 }
+
+const readCooldown = (container) => Number(container.querySelector('[data-cooldown]')?.value) || undefined;
 
 /* ============================ Auth ============================ */
 
@@ -304,6 +333,7 @@ function scheduleText(chore) {
     personal: days || 'every day',
     weekly: days || '',
     due_by: `once a week, due by ${DAYS_FULL[chore.days?.[0]] ?? '?'}`,
+    anytime: `anytime, at most ${cooldownText(chore.cooldownDays)}`,
   }[chore.frequency];
   return `${isPerKid(chore) ? 'Each kid' : 'Shared — anyone can do it'} · ${when}`;
 }
@@ -311,7 +341,9 @@ function scheduleText(chore) {
 const scopeIcon = (chore) =>
   isPerKid(chore)
     ? '<i class="bi bi-person-fill scope-icon" aria-label="Each kid"></i>'
-    : '<i class="bi bi-people-fill scope-icon" aria-label="Shared"></i>';
+    : chore.frequency === 'anytime'
+      ? '<i class="bi bi-stars scope-icon" aria-label="Bonus job"></i>'
+      : '<i class="bi bi-people-fill scope-icon" aria-label="Shared"></i>';
 
 function setChartView(view) {
   state.chartView = view;
@@ -401,7 +433,8 @@ function renderTodayBoard() {
     const items = todayItemsForKid(kid, today, dates);
     const doneCount = items.filter((i) => i.done).length;
     const pct = items.length ? Math.round((doneCount / items.length) * 100) : 100;
-    const earned = items.filter((i) => i.done).reduce((sum, i) => sum + i.done.points, 0);
+    // Everything this kid earned today, bonus jobs and shared chores included.
+    const earned = Object.values(state.currentGrid || {}).reduce((sum, byDate) => sum + (byDate[today]?.[kid.id]?.points || 0), 0);
     const status = !items.length
       ? 'Nothing today'
       : doneCount === items.length
@@ -424,41 +457,53 @@ function renderTodayBoard() {
     </div>`;
   });
 
-  // Shared chores due today: one row each; tapping asks who did it.
+  // Shared chores due today, then anytime bonus jobs: one row each; tapping asks
+  // who did it (one kid or a team).
   const dow = now.getDay();
-  const shared = state.chores.filter((c) => c.active && !isPerKid(c) && choreIsDueOn(c, dow));
-  const sharedRows = shared.map((chore) => {
-    const doneBy = Object.values(state.currentGrid?.[chore.id]?.[today] || {})[0];
-    const body = (who) => `
-      <span class="board-check">${doneBy ? '<i class="bi bi-check-lg"></i>' : ''}</span>
-      <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${who}</span>
-      <span class="board-pts">+${chore.points}</span>`;
-    if (doneBy) {
-      const who = `<span class="board-note"><span class="who-dot" style="background:${esc(doneBy.kidColor)}"></span>${esc(doneBy.kidEmoji)} ${esc(doneBy.kidName)} did it</span>`;
-      return canActFor(doneBy.kidId)
-        ? `<button class="board-item done" data-undo="${doneBy.id}" data-undo-label="${esc(doneBy.kidName)}’s “${esc(chore.title)}”" title="Tap to undo">${body(who)}</button>`
-        : `<div class="board-item done">${body(who)}</div>`;
-    }
-    const canAct = isAdmin() || myKidId() !== null;
-    return canAct
-      ? `<button class="board-item" data-chore="${chore.id}" data-date="${today}" title="Tap when done">${body('<span class="board-note">whoever does it gets the points</span>')}</button>`
-      : `<div class="board-item">${body('')}</div>`;
-  });
-  if (sharedRows.length) {
-    cards.push(`<div class="col-12 col-md-6 col-xl-4">
+  const shared = state.chores.filter((c) => c.active && c.frequency !== 'anytime' && !isPerKid(c) && choreIsDueOn(c, dow));
+  const bonus = state.chores.filter((c) => c.active && c.frequency === 'anytime');
+  const sharedCard = (title, status, icon, list, emptyNote) => `<div class="col-12 col-md-6 col-xl-4">
       <div class="kid-board shared-board">
         <div class="kid-board-head">
-          <span class="kid-avatar shared-avatar"><i class="bi bi-people-fill"></i></span>
+          <span class="kid-avatar shared-avatar"><i class="bi bi-${icon}"></i></span>
           <div class="flex-grow-1">
-            <div class="kid-board-name">Shared</div>
-            <div class="kid-board-status">Anyone can do these</div>
+            <div class="kid-board-name">${title}</div>
+            <div class="kid-board-status">${status}</div>
           </div>
         </div>
-        <div class="board-list">${sharedRows.join('')}</div>
+        <div class="board-list">${list.map((c) => sharedItemHtml(c, today, emptyNote)).join('')}</div>
       </div>
-    </div>`);
-  }
+    </div>`;
+  if (shared.length) cards.push(sharedCard('Shared', 'Anyone can do these — or team up', 'people-fill', shared, 'whoever does it gets the points'));
+  if (bonus.length) cards.push(sharedCard('Bonus jobs', 'Extra points, any time', 'stars', bonus, 'team up and split the points'));
   board.innerHTML = cards.join('');
+}
+
+// One shared chore or bonus job on the Today board.
+function sharedItemHtml(chore, today, hint) {
+  const team = Object.values(state.currentGrid?.[chore.id]?.[today] || {});
+  const resting = team.length ? null : restingUntil(chore, today);
+  const cls = `board-item${team.length ? ' done' : ''}${resting ? ' resting' : ''}`;
+  const body = (note) => `
+      <span class="board-check">${team.length ? '<i class="bi bi-check-lg"></i>' : resting ? '<i class="bi bi-hourglass-split"></i>' : ''}</span>
+      <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${note}</span>
+      <span class="board-pts">+${chore.points}</span>`;
+  if (team.length) {
+    const names = team.map((c) => `<span class="who-dot" style="background:${esc(c.kidColor)}"></span>${esc(c.kidEmoji)} ${esc(c.kidName)}`).join(' &nbsp;');
+    const note = `<span class="board-note">${names} ${team.length > 1 ? 'did it together' : 'did it'}</span>`;
+    const label = `${team.map((c) => c.kidName).join(' & ')}’s “${chore.title}”`;
+    return team.every((c) => canActFor(c.kidId))
+      ? `<button class="${cls}" data-undo="${team.map((c) => c.id).join(',')}" data-undo-label="${esc(label)}" title="Tap to undo">${body(note)}</button>`
+      : `<div class="${cls}">${body(note)}</div>`;
+  }
+  if (resting) {
+    return `<div class="${cls}" title="Resting until ${esc(fmtDay(resting))}">${body(`<span class="board-note">available again ${esc(fmtDay(resting))}</span>`)}</div>`;
+  }
+  const canAct = isAdmin() || myKidId() !== null;
+  const note = `<span class="board-note">${esc(hint)}${chore.frequency === 'anytime' ? ` · ${esc(cooldownText(chore.cooldownDays))}` : ''}</span>`;
+  return canAct
+    ? `<button class="${cls}" data-chore="${chore.id}" data-date="${today}" title="Tap when done">${body(note)}</button>`
+    : `<div class="${cls}">${body(note)}</div>`;
 }
 
 /* ---------- Week grid ---------- */
@@ -596,7 +641,8 @@ function loadWeek() {
     </tr>`;
   const groups = [
     ['<i class="bi bi-person-fill"></i> Each kid', activeChores.filter(isPerKid)],
-    ['<i class="bi bi-people-fill"></i> Shared — anyone can do it', activeChores.filter((c) => !isPerKid(c))],
+    ['<i class="bi bi-people-fill"></i> Shared — anyone can do it', activeChores.filter((c) => !isPerKid(c) && c.frequency !== 'anytime')],
+    ['<i class="bi bi-stars"></i> Bonus jobs — any time', activeChores.filter((c) => c.frequency === 'anytime')],
   ].filter(([, list]) => list.length);
   body.innerHTML = groups
     .map(([label, list]) => `<tr class="group-row"><th colspan="8"><span class="group-label">${label}</span></th></tr>${list.map(row).join('')}`)
@@ -649,46 +695,59 @@ async function refreshWeek() {
 // The grid a date belongs to: the Today board's current week, or the week on screen.
 const gridForDate = (date) => (state.currentDates?.includes(date) ? state.currentGrid : state.weekGrid) || {};
 
-async function completeChore(choreId, kidId, date) {
+async function completeChore(choreId, kidIds, date) {
+  const ids = [].concat(kidIds);
   try {
-    const done = await api('/api/completions', { method: 'POST', body: { choreId, kidId, date } });
-    const kid = state.kids.find((k) => k.id === done.kidId);
-    toast(`${kid?.emoji || '🎉'} ${kid?.name || 'Someone'} got ${ptsLabel(done.points)}!`);
+    const done = await api('/api/completions', { method: 'POST', body: { choreId, kidIds: ids, date } });
+    const who = done.completions.map((c) => state.kids.find((k) => k.id === c.kidId)).filter(Boolean);
+    toast(
+      who.length > 1
+        ? `🤝 ${who.map((k) => k.name).join(' & ')} teamed up — ${ptsLabel(done.completions[0].points)} each!`
+        : `${who[0]?.emoji || '🎉'} ${who[0]?.name || 'Someone'} got ${ptsLabel(done.points)}!`
+    );
     await refreshWeek();
   } catch (err) {
     toast(err.message, 'danger');
   }
 }
 
+// Who did a shared chore: tap one kid, or several to credit a team (the points
+// split). A signed-in kid is always on the team; they can add siblings who helped.
 async function openCellPicker(choreId, date) {
-  pickCtx = { choreId, date };
   const chore = state.chores.find((c) => c.id === Number(choreId));
   if (!chore) return;
+  const mine = myKidId();
+  pickCtx = { choreId: chore.id, date, points: chore.points, picked: new Set(mine === null ? [] : [mine]) };
   const day = DAYS_FULL[new Date(date + 'T00:00:00').getDay()];
   $('#cellModalTitle').textContent = `Who did “${chore.title}”? — ${day}`;
   if (!state.kids.length) {
     $('#cellModalBody').innerHTML =
       '<div class="empty-state"><i class="bi bi-people"></i>Add a kid first (Settings → Kids), then check off chores.</div>';
   } else {
-    const grid = gridForDate(date);
-    const doneMap = grid[Number(choreId)]?.[date] || {};
-    const doneWeek = chore.frequency === 'due_by' ? doneThisWeek(chore, grid) : null;
-    const isDone = (k) => (doneWeek ? doneWeek.has(k.id) : !!doneMap[k.id]);
-    const mine = myKidId();
-    const available = state.kids.filter((k) => !isDone(k) && (mine === null || k.id === mine));
-    $('#cellModalBody').innerHTML = available.length
-      ? `<div class="vstack gap-2">${available
-          .map(
-            (k) => `<button class="pick-kid-btn" style="--kid-color:${esc(k.color)}" data-kid="${k.id}">
+    $('#cellModalBody').innerHTML = `<div class="vstack gap-2">${state.kids
+      .map(
+        (k) => `<button class="pick-kid-btn" style="--kid-color:${esc(k.color)}" data-kid="${k.id}"${k.id === mine ? ' data-locked' : ''}>
             <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
             <span>${esc(k.name)}</span>
-            <span class="badge text-bg-light ms-auto">${ptsLabel(chore.points)}</span>
+            <i class="bi bi-check-circle-fill pick-check ms-auto"></i>
           </button>`
-          )
-          .join('')}</div>`
-      : '<div class="empty-state"><i class="bi bi-check2-all"></i>Every kid already did this one!</div>';
+      )
+      .join('')}
+      <button class="btn btn-primary mt-1" id="pickConfirm" disabled></button>
+      <div class="form-text text-center">Pick everyone who helped — teams split the points.</div>
+    </div>`;
+    renderPickState();
   }
-  new bootstrap.Modal('#cellModal').show();
+  bootstrap.Modal.getOrCreateInstance('#cellModal').show();
+}
+
+function renderPickState() {
+  const n = pickCtx.picked.size;
+  document.querySelectorAll('#cellModalBody [data-kid]').forEach((b) => b.classList.toggle('picked', pickCtx.picked.has(Number(b.dataset.kid))));
+  const btn = $('#pickConfirm');
+  btn.disabled = n === 0;
+  const each = n ? Math.floor(pickCtx.points / n) : 0;
+  btn.textContent = n === 0 ? 'Pick who did it' : n === 1 ? `Done — ${ptsLabel(pickCtx.points)}` : `Done together — ${n > 1 && pickCtx.points % n ? '~' : ''}${ptsLabel(each)} each`;
 }
 
 // Context for the cell being picked (chore + date)
@@ -944,7 +1003,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const ok = await confirmDialog(`Undo ${undo.dataset.undoLabel || 'this check'}?`, { ok: 'Undo', danger: false });
       if (ok) {
         try {
-          await api('/api/completions/' + undo.dataset.undo, { method: 'DELETE' });
+          for (const id of undo.dataset.undo.split(',')) await api('/api/completions/' + id, { method: 'DELETE' });
           toast('Undone', 'secondary');
           await refreshWeek();
         } catch (err) { toast(err.message, 'danger'); }
@@ -954,7 +1013,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const direct = e.target.closest('[data-complete]');
     if (direct) {
       direct.disabled = true; // no double-taps while the request is in flight
-      return completeChore(Number(direct.dataset.chore), Number(direct.dataset.kid), direct.dataset.date);
+      return completeChore(Number(direct.dataset.chore), [Number(direct.dataset.kid)], direct.dataset.date);
     }
     const cell = e.target.closest('[data-chore]');
     if (cell) openCellPicker(cell.dataset.chore, cell.dataset.date);
@@ -962,10 +1021,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Kid picker modal
   $('#cellModalBody').addEventListener('click', async (e) => {
+    if (!pickCtx) return;
+    if (e.target.closest('#pickConfirm')) {
+      bootstrap.Modal.getInstance('#cellModal')?.hide();
+      return completeChore(pickCtx.choreId, [...pickCtx.picked], pickCtx.date);
+    }
     const btn = e.target.closest('[data-kid]');
-    if (!btn || !pickCtx) return;
-    bootstrap.Modal.getInstance('#cellModal')?.hide();
-    await completeChore(Number(pickCtx.choreId), Number(btn.dataset.kid), pickCtx.date);
+    if (!btn || btn.hasAttribute('data-locked')) return;
+    const id = Number(btn.dataset.kid);
+    pickCtx.picked.has(id) ? pickCtx.picked.delete(id) : pickCtx.picked.add(id);
+    renderPickState();
   });
 
   // Kids form
@@ -1025,6 +1090,7 @@ document.addEventListener('DOMContentLoaded', () => {
           title: $('#choreTitle').value.trim(),
           frequency: $('#choreFreq').value,
           days: readChoreDaysPicker($('#choreDaysRow')),
+          cooldownDays: readCooldown($('#choreDaysRow')),
           points: Number($('#chorePoints').value) || 1,
         },
       });
@@ -1074,7 +1140,7 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#choreEditTitle').value = chore.title;
     $('#choreEditPoints').value = chore.points;
     $('#choreEditFreq').value = chore.frequency;
-    renderChoreDaysPicker($('#choreEditDaysRow'), 'choreEditDay', chore.frequency, chore.days || []);
+    renderChoreDaysPicker($('#choreEditDaysRow'), 'choreEditDay', chore.frequency, chore.days || [], chore.cooldownDays || 7);
     choreEditModal().show();
   }
 
@@ -1095,6 +1161,7 @@ document.addEventListener('DOMContentLoaded', () => {
           title,
           frequency: $('#choreEditFreq').value,
           days: readChoreDaysPicker($('#choreEditDaysRow')),
+          cooldownDays: readCooldown($('#choreEditDaysRow')),
           points: Number($('#choreEditPoints').value) || 1,
         },
       });

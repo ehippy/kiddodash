@@ -99,12 +99,12 @@ test('other endpoints keep their shapes while FKs are enforced', async () => {
     const kid = await srv.api('POST', '/api/kids', { name: 'Bo' });
     const chore = await srv.api('POST', '/api/chores', { title: 'Toys', points: 3, frequency: 'daily', days: [1] });
     const completion = await srv.api('POST', '/api/completions', { choreId: chore.body.id, kidId: kid.body.id, date: '2020-06-06' });
-    assert.deepEqual(Object.keys(completion.body).sort(), ['choreId', 'doneDate', 'id', 'kidId', 'points']);
+    assert.deepEqual(Object.keys(completion.body).sort(), ['choreId', 'completions', 'doneDate', 'id', 'kidId', 'points']);
 
     const kids = await srv.api('GET', '/api/kids');
     assert.deepEqual(Object.keys(kids.body[0]).sort(), ['color', 'created_at', 'emoji', 'hasPin', 'id', 'name', 'points']);
     const chores = await srv.api('GET', '/api/chores');
-    assert.deepEqual(Object.keys(chores.body[0]).sort(), ['active', 'days', 'doneToday', 'frequency', 'id', 'points', 'title']);
+    assert.deepEqual(Object.keys(chores.body[0]).sort(), ['active', 'cooldown_days', 'days', 'doneToday', 'frequency', 'id', 'points', 'title']);
     const week = await srv.api('GET', '/api/week');
     assert.deepEqual(Object.keys(week.body).sort(), ['chores', 'grid', 'kids', 'week']);
     const completions = await srv.api('GET', '/api/completions?date=2020-06-06');

@@ -90,3 +90,48 @@ test('the week grid can be asked for by start date', async (t) => {
   ]);
   assert.equal(res.body.week[0].day, 'Sunday');
 });
+
+test('a team splits the points; one team per day', async (t) => {
+  const f = await bootFamily();
+  t.after(() => f.srv.stop());
+  const car = (await f.admin('POST', '/api/chores', { title: 'Wash car', frequency: 'daily', points: 101 })).body;
+  const team = await f.admin('POST', '/api/completions', { choreId: car.id, kidIds: [f.ada.id, f.bo.id], date: '2024-05-01' });
+  assert.equal(team.status, 201);
+  assert.deepEqual(team.body.completions.map((c) => c.points), [51, 50], 'remainder goes to the first kid');
+  const again = await f.admin('POST', '/api/completions', { choreId: car.id, kidId: f.bo.id, date: '2024-05-01' });
+  assert.equal(again.status, 409);
+  // Each-kid chores don't take teams.
+  const solo = await f.admin('POST', '/api/completions', { choreId: f.reading.id, kidIds: [f.ada.id, f.bo.id], date: '2024-05-01' });
+  assert.equal(solo.status, 400);
+});
+
+test('a kid can credit a team they are on, not one they are not', async (t) => {
+  const f = await bootFamily();
+  t.after(() => f.srv.stop());
+  const kid = f.as(await f.login('1111')); // Ada
+  const onTeam = await kid('POST', '/api/completions', { choreId: f.dishes.id, kidIds: [f.ada.id, f.bo.id], date: today() });
+  assert.equal(onTeam.status, 201);
+  const junk = (await f.admin('POST', '/api/chores', { title: 'Sweep', frequency: 'daily', points: 4 })).body;
+  const offTeam = await kid('POST', '/api/completions', { choreId: junk.id, kidIds: [f.bo.id], date: today() });
+  assert.equal(offTeam.status, 403);
+});
+
+test('anytime jobs rest for their cooldown, for everyone', async (t) => {
+  const f = await bootFamily();
+  t.after(() => f.srv.stop());
+  const garage = (await f.admin('POST', '/api/chores', { title: 'Garage', frequency: 'anytime', points: 50, cooldownDays: 30, days: [1] })).body;
+  assert.equal(garage.cooldown_days, 30);
+  assert.equal(garage.days, null, 'anytime jobs have no days');
+  assert.equal((await f.admin('POST', '/api/completions', { choreId: garage.id, kidId: f.ada.id, date: '2024-05-01' })).status, 201);
+  const soon = await f.admin('POST', '/api/completions', { choreId: garage.id, kidId: f.bo.id, date: '2024-05-20' });
+  assert.equal(soon.status, 409);
+  assert.match(soon.body.error, /available again Fri, May 31/);
+  assert.equal((await f.admin('POST', '/api/completions', { choreId: garage.id, kidId: f.bo.id, date: '2024-05-31' })).status, 201);
+  // Default cooldown is a week; the week grid reports when it was last done.
+  const quick = (await f.admin('POST', '/api/chores', { title: 'Quick', frequency: 'anytime' })).body;
+  assert.equal(quick.cooldown_days, 7);
+  const week = await f.srv.api('GET', '/api/week?start=2024-05-27');
+  const g = week.body.chores.find((c) => c.id === garage.id);
+  assert.equal(g.lastDone, '2024-05-31');
+  assert.equal(g.cooldownDays, 30);
+});

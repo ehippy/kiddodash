@@ -43,8 +43,9 @@ db.exec(`
     title       TEXT NOT NULL,
     points      INTEGER NOT NULL DEFAULT 1,
     frequency   TEXT NOT NULL DEFAULT 'weekly'
-                CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays', 'due_by')),
+                CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays', 'due_by', 'anytime')),
     days        TEXT, -- comma-separated day-of-week ints (0=Sun..6=Sat), e.g. '1,4'
+    cooldown_days INTEGER, -- 'anytime' only: at most once per this many days
     active      INTEGER NOT NULL DEFAULT 1
   );
 
@@ -171,6 +172,32 @@ function migrate() {
       PRAGMA foreign_keys = ON;
     `);
     console.log('migrated: chores now support due-by-day weekly chores');
+  }
+
+  const choresSql4 = tableSql('chores');
+  if (choresSql4 && !/'anytime'/.test(choresSql4)) {
+    // 'anytime' bonus jobs: never due, with a cooldown between completions.
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = ON;
+      ALTER TABLE chores RENAME TO chores_old;
+      CREATE TABLE chores (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL,
+        points      INTEGER NOT NULL DEFAULT 1,
+        frequency   TEXT NOT NULL DEFAULT 'weekly'
+                    CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays', 'due_by', 'anytime')),
+        days        TEXT,
+        cooldown_days INTEGER,
+        active      INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO chores (id, title, points, frequency, days, active)
+        SELECT id, title, points, frequency, days, active FROM chores_old;
+      DROP TABLE chores_old;
+      PRAGMA legacy_alter_table = OFF;
+      PRAGMA foreign_keys = ON;
+    `);
+    console.log('migrated: chores now support anytime bonus jobs');
   }
 
   const compSql = tableSql('completions');
@@ -730,7 +757,16 @@ app.get('/api/chores', (req, res) => {
   res.json(chores.map((c) => ({ ...c, doneToday: doneToday.get(c.id) || 0 })));
 });
 
-const FREQUENCIES = ['daily', 'weekly', 'personal', 'schooldays', 'due_by'];
+const FREQUENCIES = ['daily', 'weekly', 'personal', 'schooldays', 'due_by', 'anytime'];
+// Shared chores: any kid (or a team of kids) does it. The rest are each-kid.
+const SHARED = new Set(['daily', 'weekly', 'anytime']);
+
+// 'anytime' jobs carry a cooldown in days (default a week); others have none.
+function normalizeCooldown(freq, value) {
+  if (freq !== 'anytime') return null;
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 365) : 7;
+}
 
 function parseDays(str) {
   return str ? str.split(',').map(Number) : null;
@@ -746,7 +782,7 @@ function encodeDays(days) {
 // may have specific days or none at all (none = every day, for that kid).
 // 'due_by' has exactly one day, the deadline; it defaults to the week's last day.
 function normalizeChoreDays(freq, days) {
-  if (freq === 'daily' || freq === 'schooldays') return null;
+  if (freq === 'daily' || freq === 'schooldays' || freq === 'anytime') return null;
   const clean = Array.isArray(days)
     ? [...new Set(days.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a, b) => a - b)
     : [];
@@ -756,15 +792,15 @@ function normalizeChoreDays(freq, days) {
 }
 
 app.post('/api/chores', requireAdmin, (req, res) => {
-  const { title, points, frequency, days } = req.body || {};
+  const { title, points, frequency, days, cooldownDays } = req.body || {};
   if (!title || !String(title).trim()) return sendError(res, 400, 'Title is required');
   const freq = FREQUENCIES.includes(frequency) ? frequency : 'weekly';
   const normalizedDays = normalizeChoreDays(freq, days);
   const pts = Number.isInteger(Number(points)) && Number(points) > 0 ? Number(points) : 1;
   try {
     const info = prepare(
-      `INSERT INTO chores (title, points, frequency, days) VALUES (?, ?, ?, ?)`
-    ).run(String(title).trim(), pts, freq, encodeDays(normalizedDays));
+      `INSERT INTO chores (title, points, frequency, days, cooldown_days) VALUES (?, ?, ?, ?, ?)`
+    ).run(String(title).trim(), pts, freq, encodeDays(normalizedDays), normalizeCooldown(freq, cooldownDays));
     res.status(201).json(prepare('SELECT * FROM chores WHERE id = ?').get(info.lastInsertRowid));
   } catch (e) {
     sendError(res, 500, e.message);
@@ -788,9 +824,10 @@ app.put('/api/chores/:id', requireAdmin, (req, res) => {
   const normalizedDays = normalizeChoreDays(frequency, days);
   const active =
     req.body.active !== undefined ? (req.body.active ? 1 : 0) : chore.active;
+  const cooldown = normalizeCooldown(frequency, req.body.cooldownDays !== undefined ? req.body.cooldownDays : chore.cooldown_days);
 
-  prepare('UPDATE chores SET title = ?, points = ?, frequency = ?, days = ?, active = ? WHERE id = ?').run(
-    title, points, frequency, encodeDays(normalizedDays), active, chore.id
+  prepare('UPDATE chores SET title = ?, points = ?, frequency = ?, days = ?, cooldown_days = ?, active = ? WHERE id = ?').run(
+    title, points, frequency, encodeDays(normalizedDays), cooldown, active, chore.id
   );
   res.json(prepare('SELECT * FROM chores WHERE id = ?').get(chore.id));
 });
@@ -824,15 +861,35 @@ app.get('/api/completions', (req, res) => {
 });
 
 // POST /api/completions  { choreId, kidId, date? }
+// { kidId } or { kidIds: [...] } -> distinct positive ints
+function teamIds(body) {
+  const raw = Array.isArray(body?.kidIds) ? body.kidIds : [body?.kidId];
+  return [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+}
+
+// Pretty date for messages, e.g. "Tue, Oct 27"
+const prettyDate = (ds) =>
+  new Date(ds + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+// POST /api/completions  { choreId, kidId | kidIds, date? }
+// Shared chores (daily, weekly, anytime) can be credited to a team at once; the
+// points are split between them. Each-kid chores take one kid.
 app.post('/api/completions', requireAdminOrSelf((req) => {
-  const n = Number(req.body?.kidId);
-  return Number.isInteger(n) && n > 0 ? n : null;
+  // A kid may credit a team as long as they're on it.
+  const ids = teamIds(req.body);
+  const me = getSession(req)?.kidId;
+  return ids.includes(me) ? me : ids[0] ?? null;
 }), (req, res) => {
-  const { choreId, kidId, date } = req.body || {};
+  const { choreId, date } = req.body || {};
   const chore = prepare('SELECT * FROM chores WHERE id = ? AND active = 1').get(choreId);
   if (!chore) return sendError(res, 404, 'Chore not found');
-  const kid = prepare('SELECT * FROM kids WHERE id = ?').get(kidId);
-  if (!kid) return sendError(res, 404, 'Kid not found');
+  const ids = teamIds(req.body);
+  if (!ids.length) return sendError(res, 400, 'Pick who did it');
+  const kids = ids.map((id) => prepare('SELECT * FROM kids WHERE id = ?').get(id));
+  if (kids.some((k) => !k)) return sendError(res, 404, 'Kid not found');
+  const shared = SHARED.has(chore.frequency);
+  if (kids.length > 1 && !shared) return sendError(res, 400, 'Each kid checks this one off themselves');
+
   const doneDate = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : todayStr();
   // Kids check off today only; filling in other days is a parent's call. ±1 day
   // of slack because the server clock (often UTC) and the tablet's may disagree.
@@ -840,36 +897,49 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
     const drift = Math.abs(Date.parse(doneDate + 'T00:00:00Z') - Date.parse(todayStr() + 'T00:00:00Z')) / 86400000;
     if (drift > 1) return sendError(res, 403, 'Only a parent can fill in other days');
   }
-  const mineAlready = prepare('SELECT 1 FROM completions WHERE chore_id = ? AND kid_id = ? AND done_date = ?')
-    .get(chore.id, kid.id, doneDate);
-  if ((chore.frequency === 'daily' || chore.frequency === 'weekly') && !mineAlready) {
-    // Shared chore: one kid per day gets the credit. (A repeat by the same kid
-    // falls through to the UNIQUE index and its own 409.)
-    const other = prepare(
-      `SELECT k.name FROM completions c JOIN kids k ON k.id = c.kid_id
-        WHERE c.chore_id = ? AND c.done_date = ? AND c.kid_id != ?`
-    ).get(chore.id, doneDate, kid.id);
-    if (other) return sendError(res, 409, `${other.name} already did this one`);
+
+  if (shared) {
+    // One team per day gets the credit.
+    const done = prepare(
+      `SELECT c.kid_id, k.name FROM completions c JOIN kids k ON k.id = c.kid_id
+        WHERE c.chore_id = ? AND c.done_date = ? ORDER BY c.id`
+    ).all(chore.id, doneDate);
+    if (done.some((d) => ids.includes(d.kid_id))) return sendError(res, 409, 'Already completed for that day — undo it first');
+    if (done.length) return sendError(res, 409, `${done.map((d) => d.name).join(' & ')} already did this one`);
+  }
+  if (chore.frequency === 'anytime' && chore.cooldown_days) {
+    // The job rests for cooldown_days after it's done, for everyone.
+    const cd = chore.cooldown_days;
+    const near = prepare(
+      `SELECT done_date, date(done_date, ?) AS next FROM completions
+        WHERE chore_id = ? AND done_date > date(?, ?) AND done_date < date(?, ?)
+        ORDER BY done_date DESC LIMIT 1`
+    ).get(`+${cd} days`, chore.id, doneDate, `-${cd} days`, doneDate, `+${cd} days`);
+    if (near) return sendError(res, 409, `Resting — this one's available again ${prettyDate(near.next)}`);
   }
   if (chore.frequency === 'due_by') {
     // Once per kid per chart week, on any day; the UNIQUE index only covers one day.
     const [from, to] = weekBounds(doneDate, loadSettings().weekStartDay);
     const already = prepare(
       'SELECT 1 FROM completions WHERE chore_id = ? AND kid_id = ? AND done_date BETWEEN ? AND ?'
-    ).get(chore.id, kid.id, from, to);
+    ).get(chore.id, kids[0].id, from, to);
     if (already) return sendError(res, 409, 'Already done this week — undo it first');
   }
+
+  // Split the points across the team; any remainder goes to the first kids listed.
+  const base = Math.floor(chore.points / kids.length);
+  const extra = chore.points - base * kids.length;
   try {
-    const info = prepare(
-      `INSERT INTO completions (chore_id, kid_id, done_date, points) VALUES (?, ?, ?, ?)`
-    ).run(chore.id, kid.id, doneDate, chore.points);
-    res.status(201).json({
-      id: info.lastInsertRowid,
-      choreId: chore.id,
-      kidId: kid.id,
-      doneDate,
-      points: chore.points
-    });
+    const completions = inTransaction(() =>
+      kids.map((kid, i) => {
+        const points = base + (i < extra ? 1 : 0);
+        const info = prepare(
+          `INSERT INTO completions (chore_id, kid_id, done_date, points) VALUES (?, ?, ?, ?)`
+        ).run(chore.id, kid.id, doneDate, points);
+        return { id: info.lastInsertRowid, kidId: kid.id, points };
+      })
+    );
+    res.status(201).json({ ...completions[0], choreId: chore.id, doneDate, completions });
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) {
       return sendError(res, 409, 'Already completed for that day — undo it first');
@@ -914,6 +984,14 @@ app.get('/api/week', (req, res) => {
       WHERE c.done_date IN (${dates.map(() => '?').join(',')})`
   ).all(...dates);
 
+  const lastDone = new Map(
+    prepare(
+      `SELECT c.chore_id, MAX(c.done_date) AS d FROM completions c
+         JOIN chores ch ON ch.id = c.chore_id AND ch.frequency = 'anytime'
+        GROUP BY c.chore_id`
+    ).all().map((r) => [r.chore_id, r.d])
+  );
+
   const kidById = new Map(kids.map((k) => [k.id, k]));
   const grid = {};
   for (const row of rows) {
@@ -940,6 +1018,8 @@ app.get('/api/week', (req, res) => {
       points: c.points,
       frequency: c.frequency,
       days: parseDays(c.days),
+      cooldownDays: c.cooldown_days,
+      lastDone: lastDone.get(c.id) || null, // anytime jobs: most recent completion, any week
       active: !!c.active
     }))
   });
