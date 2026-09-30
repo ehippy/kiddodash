@@ -695,17 +695,43 @@ async function refreshWeek() {
 // The grid a date belongs to: the Today board's current week, or the week on screen.
 const gridForDate = (date) => (state.currentDates?.includes(date) ? state.currentGrid : state.weekGrid) || {};
 
+// Kids whose Today list is fully checked off (and not empty).
+function kidsDoneToday() {
+  const today = dateStr(new Date());
+  if (isAway(today)) return new Set();
+  const dates = weekDates(0);
+  return new Set(state.kids.filter((k) => {
+    const items = todayItemsForKid(k, today, dates);
+    return items.length && items.every((i) => i.done);
+  }).map((k) => k.id));
+}
+
+// Confetti in the finishing kid's colour; skipped for reduced-motion users.
+function celebrate(kids) {
+  if (typeof confetti !== 'function' || !kids.length) return;
+  const colors = kids.map((k) => k.color).concat(['#ffd43b', '#ffffff']);
+  const opts = { particleCount: 90, spread: 70, startVelocity: 45, colors, zIndex: 2100, disableForReducedMotion: true };
+  confetti({ ...opts, angle: 60, origin: { x: 0, y: 0.8 } });
+  confetti({ ...opts, angle: 120, origin: { x: 1, y: 0.8 } });
+  setTimeout(() => confetti({ ...opts, particleCount: 120, spread: 100, origin: { y: 0.6 } }), 250);
+}
+
 async function completeChore(choreId, kidIds, date) {
   const ids = [].concat(kidIds);
+  const doneBefore = kidsDoneToday();
   try {
     const done = await api('/api/completions', { method: 'POST', body: { choreId, kidIds: ids, date } });
     const who = done.completions.map((c) => state.kids.find((k) => k.id === c.kidId)).filter(Boolean);
-    toast(
-      who.length > 1
-        ? `🤝 ${who.map((k) => k.name).join(' & ')} teamed up — ${ptsLabel(done.completions[0].points)} each!`
-        : `${who[0]?.emoji || '🎉'} ${who[0]?.name || 'Someone'} got ${ptsLabel(done.points)}!`
-    );
     await refreshWeek();
+    const doneAfter = kidsDoneToday();
+    const finished = state.kids.filter((k) => doneAfter.has(k.id) && !doneBefore.has(k.id));
+    celebrate(finished);
+    toast(
+      (who.length > 1
+        ? `🤝 ${who.map((k) => k.name).join(' & ')} teamed up — ${ptsLabel(done.completions[0].points)} each!`
+        : `${who[0]?.emoji || '🎉'} ${who[0]?.name || 'Someone'} got ${ptsLabel(done.points)}!`) +
+        (finished.length ? ` ${finished.map((k) => k.name).join(' & ')} finished today’s chores! 🎉` : '')
+    );
   } catch (err) {
     toast(err.message, 'danger');
   }
