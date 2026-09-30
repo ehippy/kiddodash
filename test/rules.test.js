@@ -180,3 +180,40 @@ test('the ledger is seeded once from existing history', async (t) => {
   const log = (await again.api('GET', '/api/activity')).body;
   assert.deepEqual(log.map((r) => [r.action, r.kidName, r.subject, r.points, r.actor]), [['done', 'Ada', 'Dishes', 5, null]]);
 });
+
+test('kids suggest rewards; parents add them to the menu or turn them down', async (t) => {
+  const f = await bootFamily();
+  t.after(() => f.srv.stop());
+  const ada = f.as(await f.login('1111'));
+  const bo = f.as(await f.login('2222'));
+  const idea = await ada('POST', '/api/suggestions', { kidId: f.ada.id, label: 'Trampoline park', note: 'so fun', points: 50 });
+  assert.equal(idea.status, 201);
+  // Not for someone else, max 3 waiting.
+  assert.equal((await ada('POST', '/api/suggestions', { kidId: f.bo.id, label: 'x' })).status, 403);
+  await ada('POST', '/api/suggestions', { kidId: f.ada.id, label: 'Pizza night' });
+  await ada('POST', '/api/suggestions', { kidId: f.ada.id, label: 'Late bedtime' });
+  const fourth = await ada('POST', '/api/suggestions', { kidId: f.ada.id, label: 'One more' });
+  assert.equal(fourth.status, 400);
+  assert.match(fourth.body.error, /3 ideas waiting/);
+  await bo('POST', '/api/suggestions', { kidId: f.bo.id, label: 'Sleepover' });
+
+  // Kids see only their own; parents see all, pending first.
+  assert.deepEqual((await bo('GET', '/api/suggestions')).body.map((s) => s.label), ['Sleepover']);
+  assert.equal((await f.admin('GET', '/api/suggestions')).body.length, 4);
+  assert.equal((await ada('PUT', `/api/suggestions/${idea.body.id}`, { status: 'approved', points: 1 })).status, 401);
+
+  // Approve at the parent's price -> it's on the menu.
+  const ok = await f.admin('PUT', `/api/suggestions/${idea.body.id}`, { status: 'approved', points: 800, response: 'deal!' });
+  assert.equal(ok.status, 200);
+  const menu = (await f.srv.api('GET', '/api/settings')).body.rewards;
+  assert.ok(menu.some((r) => r.label === 'Trampoline park' && r.points === 800));
+  assert.equal((await f.admin('PUT', `/api/suggestions/${idea.body.id}`, { status: 'declined' })).status, 409);
+
+  // Decline with a note; the kid sees it.
+  const sleepover = (await bo('GET', '/api/suggestions')).body[0];
+  await f.admin('PUT', `/api/suggestions/${sleepover.id}`, { status: 'declined', response: 'maybe in summer' });
+  const mine = (await bo('GET', '/api/suggestions')).body[0];
+  assert.deepEqual([mine.status, mine.response], ['declined', 'maybe in summer']);
+  const adaIdeas = (await ada('GET', '/api/suggestions')).body;
+  assert.deepEqual(adaIdeas.find((s) => s.label === 'Trampoline park').points, 800);
+});

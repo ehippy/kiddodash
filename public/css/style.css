@@ -1245,3 +1245,61 @@ button.board-item:active {
     font-size: 0.72rem;
   }
 }
+
+/* ---------- Reward ideas ---------- */
+.idea-item {
+  border: 1px solid var(--kd-line);
+  border-left: 4px solid var(--kid-color);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem;
+}
+
+.idea-label {
+  font-weight: 800;
+}
+
+.idea-meta {
+  font-size: 0.8rem;
+  color: var(--kd-muted);
+}
+
+.idea-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.idea-price {
+  width: 120px;
+}
+
+.idea-note {
+  flex: 1;
+  min-width: 140px;
+}
+
+.idea-mine-head {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--kd-muted);
+  margin-bottom: 0.3rem;
+}
+
+.idea-mine {
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--kd-line);
+}
+
+.idea-response {
+  font-size: 0.8rem;
+  color: var(--kd-muted);
+  margin-top: 0.15rem;
+}
+
+.idea-decided {
+  font-size: 0.85rem;
+  padding: 0.15rem 0;
+}

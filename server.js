@@ -89,6 +89,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
 
+  -- Kids' reward ideas, for a parent to add to the menu or turn down.
+  CREATE TABLE IF NOT EXISTS suggestions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kid_id      INTEGER NOT NULL REFERENCES kids(id) ON DELETE CASCADE,
+    label       TEXT NOT NULL,
+    note        TEXT,     -- the kid's "why"
+    points      INTEGER,  -- the kid's price guess
+    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'declined')),
+    response    TEXT,     -- a parent's note back
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_at  TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS sessions (
     token   TEXT PRIMARY KEY,
     role    TEXT NOT NULL,
@@ -1089,6 +1102,76 @@ app.get('/api/week', (req, res) => {
       active: !!c.active
     }))
   });
+});
+
+// --- Reward suggestions -----------------------------------------------------------
+
+const MAX_PENDING_IDEAS = 3;
+const publicIdea = (r) => ({
+  id: r.id, kidId: r.kid_id, kidName: r.kid_name, kidEmoji: r.kid_emoji, kidColor: r.kid_color,
+  label: r.label, note: r.note, points: r.points, status: r.status, response: r.response,
+  createdAt: r.created_at, decidedAt: r.decided_at,
+});
+
+// GET /api/suggestions -> a kid sees their own; parents (or an unlocked app) see
+// everyone's. Waiting ideas first (oldest first), then the latest decided ones.
+app.get('/api/suggestions', (req, res) => {
+  const session = getSession(req);
+  const mine = authConfigured() && session?.role !== 'admin' ? session?.kidId ?? -1 : null;
+  const rows = prepare(
+    `SELECT s.*, k.name AS kid_name, k.emoji AS kid_emoji, k.color AS kid_color
+       FROM suggestions s JOIN kids k ON k.id = s.kid_id
+      ${mine === null ? '' : 'WHERE s.kid_id = ?'}
+      ORDER BY s.status = 'pending' DESC,
+               CASE WHEN s.status = 'pending' THEN s.created_at END ASC, -- queue: oldest first
+               COALESCE(s.decided_at, s.created_at) DESC, s.id
+      LIMIT 60`
+  ).all(...(mine === null ? [] : [mine]));
+  res.json(rows.map(publicIdea));
+});
+
+// POST /api/suggestions { kidId, label, note?, points? }
+app.post('/api/suggestions', requireAdminOrSelf((req) => Number(req.body?.kidId)), (req, res) => {
+  const { kidId, note, points } = req.body || {};
+  const kid = prepare('SELECT * FROM kids WHERE id = ?').get(kidId);
+  if (!kid) return sendError(res, 404, 'Kid not found');
+  const label = String(req.body?.label || '').trim().slice(0, 80);
+  if (!label) return sendError(res, 400, 'What would you like?');
+  const pending = prepare("SELECT COUNT(*) AS n FROM suggestions WHERE kid_id = ? AND status = 'pending'").get(kid.id).n;
+  if (pending >= MAX_PENDING_IDEAS) {
+    return sendError(res, 400, `${kid.name} already has ${MAX_PENDING_IDEAS} ideas waiting — give a parent a chance to look`);
+  }
+  const pts = Math.round(Number(points));
+  const info = prepare('INSERT INTO suggestions (kid_id, label, note, points) VALUES (?, ?, ?, ?)').run(
+    kid.id, label, String(note || '').trim().slice(0, 200) || null, pts >= 1 ? Math.min(pts, 99999) : null
+  );
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+// PUT /api/suggestions/:id { status: 'approved', label?, points } | { status: 'declined', response? }
+// Approving adds it to the rewards menu at the parent's price.
+app.put('/api/suggestions/:id', requireAdmin, (req, res) => {
+  const idea = prepare('SELECT * FROM suggestions WHERE id = ?').get(req.params.id);
+  if (!idea) return sendError(res, 404, 'Suggestion not found');
+  if (idea.status !== 'pending') return sendError(res, 409, 'Already decided');
+  const response = String(req.body?.response || '').trim().slice(0, 200) || null;
+  if (req.body?.status === 'approved') {
+    const label = String(req.body?.label || idea.label).trim().slice(0, 80) || idea.label;
+    const points = Math.round(Number(req.body?.points));
+    if (!(points >= 1)) return sendError(res, 400, 'Set a price of at least 1 point');
+    const settings = loadSettings();
+    const reward = { id: Date.now(), label, points: Math.min(points, 99999) };
+    settings.rewards = [...settings.rewards, reward];
+    saveSettings(settings);
+    prepare("UPDATE suggestions SET status = 'approved', label = ?, points = ?, response = ?, decided_at = datetime('now') WHERE id = ?")
+      .run(label, reward.points, response, idea.id);
+    return res.json({ ok: true, reward });
+  }
+  if (req.body?.status === 'declined') {
+    prepare("UPDATE suggestions SET status = 'declined', response = ?, decided_at = datetime('now') WHERE id = ?").run(response, idea.id);
+    return res.json({ ok: true });
+  }
+  sendError(res, 400, "status must be 'approved' or 'declined'");
 });
 
 // --- Activity ledger (parents) --------------------------------------------------

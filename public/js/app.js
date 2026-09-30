@@ -754,6 +754,81 @@ function renderPickState() {
 // Context for the cell being picked (chore + date)
 let pickCtx = null;
 
+/* ============================ Reward ideas ============================ */
+
+let ideas = [];
+
+async function refreshIdeas() {
+  try { ideas = await api('/api/suggestions'); } catch { ideas = []; }
+  renderIdeas();
+}
+
+function renderIdeas() {
+  const admin = isAdmin();
+  const mine = myKidId();
+  const pending = ideas.filter((i) => i.status === 'pending');
+
+  // Parents: a count on the Rewards tab while ideas wait.
+  const badge = $('#ideasBadge');
+  badge.textContent = pending.length;
+  badge.classList.toggle('d-none', !admin || !pending.length);
+
+  // Kids (or anyone, when the app has no PINs) can suggest.
+  const canSuggest = mine !== null || !state.authRequired;
+  $('#suggestCard').classList.toggle('d-none', !canSuggest);
+  const kidSel = $('#suggestKid');
+  kidSel.classList.toggle('d-none', mine !== null);
+  if (mine === null) {
+    const keep = kidSel.value;
+    kidSel.innerHTML = '<option value="">Whose idea?</option>' +
+      state.kids.map((k) => `<option value="${k.id}">${esc(k.emoji)} ${esc(k.name)}</option>`).join('');
+    kidSel.value = keep;
+  }
+  const status = (i) =>
+    i.status === 'pending'
+      ? '<span class="badge text-bg-secondary">waiting</span>'
+      : i.status === 'approved'
+        ? `<span class="badge text-bg-success">on the menu! ${ptsLabel(i.points)}</span>`
+        : '<span class="badge text-bg-light">not this time</span>';
+  const own = mine === null ? [] : ideas;
+  $('#myIdeas').innerHTML = own.length
+    ? `<div class="idea-mine-head">Your ideas</div>${own
+        .map((i) => `<div class="idea-mine">
+            <div class="d-flex align-items-center gap-2"><span class="flex-grow-1 fw-bold">${esc(i.label)}</span>${status(i)}</div>
+            ${i.response ? `<div class="idea-response"><i class="bi bi-chat-left-quote me-1"></i>${esc(i.response)}</div>` : ''}
+          </div>`)
+        .join('')}`
+    : '';
+
+  // Parents: the queue, then a few recent decisions.
+  $('#ideasCard').classList.toggle('d-none', !admin || !ideas.length);
+  if (!admin) return;
+  const decided = ideas.filter((i) => i.status !== 'pending').slice(0, 5);
+  $('#ideasList').innerHTML =
+    (pending.length
+      ? pending
+          .map((i) => `<div class="idea-item" style="--kid-color:${esc(i.kidColor)}">
+              <div class="idea-label">${esc(i.label)}</div>
+              <div class="idea-meta">${esc(i.kidEmoji)} ${esc(i.kidName)}${i.points ? ` · thinks it’s worth ${ptsLabel(i.points)}` : ''}${i.note ? ` · “${esc(i.note)}”` : ''}</div>
+              <div class="idea-actions">
+                <div class="input-group input-group-sm idea-price">
+                  <input type="number" min="1" max="99999" class="form-control" id="idea-pts-${i.id}" value="${i.points || ''}" placeholder="Price">
+                  <span class="input-group-text">pts</span>
+                </div>
+                <input class="form-control form-control-sm idea-note" id="idea-note-${i.id}" maxlength="200" placeholder="Note to ${esc(i.kidName)} (optional)">
+                <button class="btn btn-sm btn-primary" data-approve="${i.id}"><i class="bi bi-plus-lg me-1"></i>Add to menu</button>
+                <button class="btn btn-sm btn-outline-secondary" data-decline="${i.id}">Not this time</button>
+              </div>
+            </div>`)
+          .join('')
+      : '<div class="text-muted small">No ideas waiting.</div>') +
+    (decided.length
+      ? `<div class="idea-mine-head mt-2">Recently decided</div>${decided
+          .map((i) => `<div class="idea-decided">${status(i)} <strong>${esc(i.label)}</strong> <span class="text-muted">— ${esc(i.kidName)}</span></div>`)
+          .join('')}`
+      : '');
+}
+
 /* ============================ Activity ledger ============================ */
 
 let activityRows = [];
@@ -1092,6 +1167,7 @@ async function refreshRewards() {
   renderRecentSpends();
   loadRewardsTab(); // fresh balances; edit/delete buttons render per role
   applyRoleUI();
+  await refreshIdeas();
   loadKidsTab(); // kid cards now show balance, not lifetime earned
 }
 
@@ -1359,6 +1435,44 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { toast(err.message, 'danger'); }
   });
 
+  // ---- Reward ideas ----
+  $('#suggestForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const kidId = myKidId() ?? Number($('#suggestKid').value);
+    if (!kidId) return toast('Pick whose idea it is', 'warning');
+    try {
+      await api('/api/suggestions', {
+        method: 'POST',
+        body: { kidId, label: $('#suggestLabel').value, points: $('#suggestPoints').value || undefined, note: $('#suggestNote').value },
+      });
+      ['#suggestLabel', '#suggestPoints', '#suggestNote'].forEach((sel) => ($(sel).value = ''));
+      toast('💡 Idea sent! A parent will take a look.');
+      await refreshIdeas();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+  $('#ideasList').addEventListener('click', async (e) => {
+    const approve = e.target.closest('[data-approve]');
+    const decline = e.target.closest('[data-decline]');
+    const id = (approve || decline)?.dataset.approve || (approve || decline)?.dataset.decline;
+    if (!id) return;
+    const response = $(`#idea-note-${id}`).value;
+    try {
+      if (approve) {
+        const points = Number($(`#idea-pts-${id}`).value);
+        if (!(points >= 1)) { $(`#idea-pts-${id}`).focus(); return toast('Set a price first', 'warning'); }
+        const res = await api(`/api/suggestions/${id}`, { method: 'PUT', body: { status: 'approved', points, response } });
+        toast(`🎁 “${res.reward.label}” is on the menu for ${ptsLabel(res.reward.points)}`);
+        state.settings = await api('/api/settings');
+        loadRewardsTab();
+        applyRoleUI();
+      } else {
+        await api(`/api/suggestions/${id}`, { method: 'PUT', body: { status: 'declined', response } });
+        toast('Marked “not this time”', 'secondary');
+      }
+      await refreshIdeas();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
   // ---- Activity ledger ----
   ['#actKid', '#actDays', '#actType'].forEach((sel) => $(sel).addEventListener('change', loadActivity));
   $('#actCsv').addEventListener('click', downloadActivityCsv);
@@ -1597,6 +1711,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.visibilityState !== 'visible' || document.querySelector('.modal.show')) return;
     if (state.authRequired && !state.session) return;
     refreshWeek().catch(() => {});
+    refreshIdeas().catch(() => {});
   };
   setInterval(liveRefresh, 60 * 1000);
   document.addEventListener('visibilitychange', liveRefresh);
