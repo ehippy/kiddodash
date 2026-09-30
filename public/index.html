@@ -6,11 +6,14 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>KiddoDash — Chore Chart</title>
   <script>
-    // Set theme before first paint to avoid a flash
+    // Set palette + light/dark before first paint to avoid a flash.
+    // kiddodash-theme: 'light' | 'dark' | absent (follow the system).
     (function () {
-      var saved = localStorage.getItem('kiddodash-theme');
-      var dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var mode = null, palette = null;
+      try { mode = localStorage.getItem('kiddodash-theme'); palette = localStorage.getItem('kiddodash-palette'); } catch (e) {}
+      var dark = mode ? mode === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-kd-theme', palette || 'grape');
     })();
   </script>
   <link href="/vendor/bootstrap.min.css" rel="stylesheet">
@@ -29,11 +32,26 @@
       <span class="badge text-bg-light d-none" id="whoBadge"></span>
       <button class="btn btn-outline-light btn-sm d-none" id="btnMyPin" title="Change my PIN"><i class="bi bi-key"></i></button>
       <button class="btn btn-outline-light btn-sm d-none" id="btnSignOut" title="Sign out"><i class="bi bi-box-arrow-right"></i></button>
-      <button class="btn btn-outline-light btn-sm" id="themeToggle" title="Toggle light/dark mode" aria-label="Toggle dark mode">
-        <i class="bi bi-moon-fill theme-icon-dark d-none"></i>
-        <i class="bi bi-sun-fill theme-icon-light"></i>
-        <span class="d-none d-sm-inline ms-1">Theme</span>
-      </button>
+      <div class="dropdown">
+        <button class="btn btn-outline-light btn-sm dropdown-toggle" id="themeToggle" type="button"
+                data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="Theme">
+          <i class="bi bi-palette-fill"></i><span class="d-none d-sm-inline ms-1">Theme</span>
+        </button>
+        <div class="dropdown-menu dropdown-menu-end theme-menu p-3" aria-labelledby="themeToggle">
+          <div class="theme-menu-label">Mode</div>
+          <div class="btn-group btn-group-sm w-100 mb-3" role="group" aria-label="Light or dark">
+            <input type="radio" class="btn-check" name="themeMode" id="modeLight" value="light" autocomplete="off">
+            <label class="btn btn-outline-primary" for="modeLight"><i class="bi bi-sun-fill me-1"></i>Light</label>
+            <input type="radio" class="btn-check" name="themeMode" id="modeDark" value="dark" autocomplete="off">
+            <label class="btn btn-outline-primary" for="modeDark"><i class="bi bi-moon-fill me-1"></i>Dark</label>
+            <input type="radio" class="btn-check" name="themeMode" id="modeAuto" value="auto" autocomplete="off">
+            <label class="btn btn-outline-primary" for="modeAuto"><i class="bi bi-circle-half me-1"></i>Auto</label>
+          </div>
+          <div class="theme-menu-label">Colors</div>
+          <div class="theme-swatches" id="themeSwatches"></div>
+          <div class="theme-menu-note">Saved on this device</div>
+        </div>
+      </div>
     </div>
   </div>
 </nav>
@@ -85,7 +103,7 @@
       </div>
       <div class="chart-legend mt-2">
         <span><span class="av todo legend-av">🙂</span> to do</span>
-        <span><span class="av done legend-av" style="--kid-color:#7c5cd9">🙂</span> done</span>
+        <span><span class="av done legend-av" style="--kid-color:var(--kd-accent)">🙂</span> done</span>
         <span><span class="av late legend-av">🙂</span> late</span>
         <span><span class="av missed legend-av">🙂</span> missed</span>
         <span><span class="av future legend-av">🙂</span> coming up</span>

@@ -1,15 +1,61 @@
 /* KiddoDash custom styles (on top of Bootstrap 5) */
 
-/* ============ Palette: kid-friendly pastel, but still AA-contrast ============
-   Buttons/text/badges need real contrast against white, so the "brand" shades
-   below read as saturated candy tones rather than washed-out pastel — the true
-   pastels live in backgrounds, gradients and chip fills instead, where they
-   pair with dark text or a theme-adaptive color and don't need to carry
-   contrast themselves. */
+/* ============ Themes ============
+   Eight palettes, each in light and dark. A palette sets only its accent
+   (buttons, links, active states; must carry white text), a second accent
+   for the navbar gradient, and — for dark mode — a lighter accent for text
+   on dark surfaces. Everything else (hovers, focus rings, tints, page and
+   card backgrounds) is derived below with color-mix(), so the themes stay
+   consistent. Picked per device from the navbar; set before first paint. */
+
 :root {
-  --bs-primary: #7c5cd9;
-  --bs-primary-rgb: 124, 92, 217;
-  --bs-secondary: #75708f;
+  --kd-accent: #7c5cd9;
+  --kd-accent-rgb: 124, 92, 217;
+  --kd-accent-2: #9b5cc7;
+}
+[data-kd-theme="grape"][data-bs-theme="dark"] { --kd-accent-text: #a48bef; }
+
+[data-kd-theme="ocean"] { --kd-accent: #2563eb; --kd-accent-rgb: 37, 99, 235; --kd-accent-2: #0e7490; }
+[data-kd-theme="ocean"][data-bs-theme="dark"] { --kd-accent-text: #93c5fd; }
+
+[data-kd-theme="mint"] { --kd-accent: #0f766e; --kd-accent-rgb: 15, 118, 110; --kd-accent-2: #047857; }
+[data-kd-theme="mint"][data-bs-theme="dark"] { --kd-accent-text: #5eead4; }
+
+[data-kd-theme="forest"] { --kd-accent: #3f7d3a; --kd-accent-rgb: 63, 125, 58; --kd-accent-2: #6b6a1f; }
+[data-kd-theme="forest"][data-bs-theme="dark"] { --kd-accent-text: #a3d98f; }
+
+[data-kd-theme="sunshine"] { --kd-accent: #b45309; --kd-accent-rgb: 180, 83, 9; --kd-accent-2: #a16207; }
+[data-kd-theme="sunshine"][data-bs-theme="dark"] { --kd-accent-text: #fcd34d; }
+
+[data-kd-theme="sunset"] { --kd-accent: #c2410c; --kd-accent-rgb: 194, 65, 12; --kd-accent-2: #be185d; }
+[data-kd-theme="sunset"][data-bs-theme="dark"] { --kd-accent-text: #fdba74; }
+
+[data-kd-theme="bubblegum"] { --kd-accent: #db2777; --kd-accent-rgb: 219, 39, 119; --kd-accent-2: #a21caf; }
+[data-kd-theme="bubblegum"][data-bs-theme="dark"] { --kd-accent-text: #f9a8d4; }
+
+[data-kd-theme="slate"] { --kd-accent: #475569; --kd-accent-rgb: 71, 85, 105; --kd-accent-2: #334155; }
+[data-kd-theme="slate"][data-bs-theme="dark"] { --kd-accent: #64748b; --kd-accent-rgb: 100, 116, 139; --kd-accent-text: #cbd5e1; }
+
+/* Derived tokens, light */
+:root {
+  --kd-accent-text: var(--kd-accent);
+  --kd-accent-hover: color-mix(in srgb, var(--kd-accent) 88%, #000);
+  --kd-accent-active: color-mix(in srgb, var(--kd-accent) 78%, #000);
+  --kd-accent-ring: color-mix(in srgb, var(--kd-accent) 45%, #fff);
+  --kd-accent-glow: color-mix(in srgb, var(--kd-accent) 25%, transparent);
+  --kd-tint: color-mix(in srgb, var(--kd-accent-text) 11%, transparent);
+  --kd-secondary: color-mix(in srgb, var(--kd-accent) 22%, #6b7280);
+  --kd-bg: linear-gradient(160deg,
+    color-mix(in srgb, var(--kd-accent) 10%, #fff) 0%, #fafafa 45%,
+    color-mix(in srgb, var(--kd-accent-2) 9%, #fff) 100%);
+  --kd-card: #fff;
+  --kd-item-bg: color-mix(in srgb, var(--kd-accent) 3%, #f7f8fa);
+  --kd-line: #dee2e6;
+  --kd-shadow: color-mix(in srgb, var(--kd-accent) 10%, transparent);
+
+  --bs-primary: var(--kd-accent);
+  --bs-primary-rgb: var(--kd-accent-rgb);
+  --bs-secondary: var(--kd-secondary);
   --bs-secondary-rgb: 117, 112, 143;
   --bs-success: #257e59;
   --bs-success-rgb: 37, 126, 89;
@@ -19,86 +65,101 @@
   --bs-info-rgb: 169, 228, 245;
   --bs-warning: #ffdd9e;
   --bs-warning-rgb: 255, 221, 158;
-  --bs-link-color: #7c5cd9;
-  --bs-link-color-rgb: 124, 92, 217;
-  --bs-link-hover-color: #664bb2;
-  --bs-link-hover-color-rgb: 102, 75, 178;
+  --bs-link-color: var(--kd-accent-text);
+  --bs-link-color-rgb: var(--kd-accent-rgb);
+  --bs-link-hover-color: var(--kd-accent-hover);
   --bs-border-radius: 0.55rem;
   --bs-card-border-radius: 1rem;
+}
 
-  --kd-primary-light: #a48bef; /* dark-mode accent: lighter for contrast on dark bg */
+/* Derived tokens, dark: surfaces are a near-black tinted with the accent */
+[data-bs-theme="dark"] {
+  --kd-accent-ring: color-mix(in srgb, var(--kd-accent-text) 55%, transparent);
+  --kd-tint: color-mix(in srgb, var(--kd-accent-text) 15%, transparent);
+  --kd-secondary: color-mix(in srgb, var(--kd-accent-text) 25%, #9ca3af);
+  --kd-bg: linear-gradient(160deg,
+    color-mix(in srgb, var(--kd-accent) 22%, #111318) 0%, #111318 50%,
+    color-mix(in srgb, var(--kd-accent-2) 16%, #111318) 100%);
+  --kd-card: color-mix(in srgb, var(--kd-accent) 9%, #1d2028);
+  --kd-item-bg: color-mix(in srgb, var(--kd-accent) 6%, #14161c);
+  --kd-line: color-mix(in srgb, var(--kd-accent) 14%, #3a3f4b);
+  --kd-shadow: rgba(0, 0, 0, 0.35);
+
+  --bs-body-bg: var(--kd-card); /* modals, dropdowns */
+  --bs-border-color: var(--kd-line);
+  --bs-link-color: var(--kd-accent-text);
+  --bs-link-hover-color: color-mix(in srgb, var(--kd-accent-text) 80%, #fff);
 }
 
 body {
   font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
   min-height: 100vh;
-  background: linear-gradient(160deg, #f3f0ff 0%, #fafafa 45%, #fff4ea 100%);
+  background: var(--kd-bg) !important;
 }
 
 h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   font-weight: 700;
 }
 
-/* Cards: soft rounded corners + a gentle tinted shadow instead of flat gray */
 .card {
-  border-color: rgba(124, 92, 217, 0.12);
+  border-color: color-mix(in srgb, var(--kd-accent) 12%, transparent);
 }
 
 .card.shadow-sm {
-  box-shadow: 0 2px 14px rgba(124, 92, 217, 0.1) !important;
+  box-shadow: 0 2px 14px var(--kd-shadow) !important;
 }
 
-/* Buttons/checkboxes/focus rings: Bootstrap bakes literal hex into these
-   per-component variables at build time rather than reading --bs-primary etc,
-   so each one needs its own override to pick up the new palette. */
+/* Buttons: Bootstrap bakes colors into each .btn-* class, so re-point them at
+   the theme tokens */
 .btn-primary {
-  --bs-btn-bg: #7c5cd9;
-  --bs-btn-border-color: #7c5cd9;
-  --bs-btn-hover-bg: #7053c3;
-  --bs-btn-hover-border-color: #6a4bc4;
-  --bs-btn-active-bg: #664bb2;
-  --bs-btn-active-border-color: #5b3fae;
-  --bs-btn-disabled-bg: #7c5cd9;
-  --bs-btn-disabled-border-color: #7c5cd9;
-  --bs-btn-focus-shadow-rgb: 124, 92, 217;
+  --bs-btn-bg: var(--kd-accent);
+  --bs-btn-border-color: var(--kd-accent);
+  --bs-btn-hover-bg: var(--kd-accent-hover);
+  --bs-btn-hover-border-color: var(--kd-accent-hover);
+  --bs-btn-active-bg: var(--kd-accent-active);
+  --bs-btn-active-border-color: var(--kd-accent-active);
+  --bs-btn-disabled-bg: var(--kd-accent);
+  --bs-btn-disabled-border-color: var(--kd-accent);
 }
 
 .btn-outline-primary {
-  --bs-btn-color: #7c5cd9;
-  --bs-btn-border-color: #7c5cd9;
-  --bs-btn-hover-bg: #7c5cd9;
-  --bs-btn-hover-border-color: #7c5cd9;
-  --bs-btn-active-bg: #664bb2;
-  --bs-btn-active-border-color: #5b3fae;
-  --bs-btn-disabled-color: #7c5cd9;
-  --bs-btn-disabled-border-color: #7c5cd9;
-  --bs-btn-focus-shadow-rgb: 124, 92, 217;
+  --bs-btn-color: var(--kd-accent-text);
+  --bs-btn-border-color: var(--kd-accent-text);
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: var(--kd-accent);
+  --bs-btn-hover-border-color: var(--kd-accent);
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: var(--kd-accent-active);
+  --bs-btn-active-border-color: var(--kd-accent-active);
+  --bs-btn-disabled-color: var(--kd-accent-text);
+  --bs-btn-disabled-border-color: var(--kd-accent-text);
 }
 
 .btn-secondary {
-  --bs-btn-bg: #75708f;
-  --bs-btn-border-color: #75708f;
-  --bs-btn-hover-bg: #696581;
-  --bs-btn-hover-border-color: #625e79;
-  --bs-btn-active-bg: #605c75;
-  --bs-btn-active-border-color: #59556d;
-  --bs-btn-disabled-bg: #75708f;
-  --bs-btn-disabled-border-color: #75708f;
-  --bs-btn-focus-shadow-rgb: 117, 112, 143;
+  --bs-btn-bg: var(--kd-secondary);
+  --bs-btn-border-color: var(--kd-secondary);
+  --bs-btn-hover-bg: color-mix(in srgb, var(--kd-secondary) 88%, #000);
+  --bs-btn-hover-border-color: color-mix(in srgb, var(--kd-secondary) 88%, #000);
+  --bs-btn-active-bg: color-mix(in srgb, var(--kd-secondary) 80%, #000);
+  --bs-btn-active-border-color: color-mix(in srgb, var(--kd-secondary) 80%, #000);
+  --bs-btn-disabled-bg: var(--kd-secondary);
+  --bs-btn-disabled-border-color: var(--kd-secondary);
 }
 
 .btn-outline-secondary {
-  --bs-btn-color: #75708f;
-  --bs-btn-border-color: #a5a1b8;
-  --bs-btn-hover-bg: #75708f;
-  --bs-btn-hover-border-color: #75708f;
-  --bs-btn-active-bg: #696581;
-  --bs-btn-active-border-color: #625e79;
-  --bs-btn-disabled-color: #75708f;
-  --bs-btn-disabled-border-color: #a5a1b8;
-  --bs-btn-focus-shadow-rgb: 117, 112, 143;
+  --bs-btn-color: var(--kd-secondary);
+  --bs-btn-border-color: color-mix(in srgb, var(--kd-secondary) 60%, transparent);
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: var(--kd-secondary);
+  --bs-btn-hover-border-color: var(--kd-secondary);
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: color-mix(in srgb, var(--kd-secondary) 88%, #000);
+  --bs-btn-active-border-color: color-mix(in srgb, var(--kd-secondary) 88%, #000);
+  --bs-btn-disabled-color: var(--kd-secondary);
+  --bs-btn-disabled-border-color: color-mix(in srgb, var(--kd-secondary) 60%, transparent);
 }
 
+/* Danger stays red in every theme — it means "careful", not "brand" */
 .btn-danger {
   --bs-btn-bg: #cc3355;
   --bs-btn-border-color: #cc3355;
@@ -108,7 +169,6 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   --bs-btn-active-border-color: #9c2742;
   --bs-btn-disabled-bg: #cc3355;
   --bs-btn-disabled-border-color: #cc3355;
-  --bs-btn-focus-shadow-rgb: 204, 51, 85;
 }
 
 .btn-outline-danger {
@@ -120,32 +180,37 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   --bs-btn-active-border-color: #ad2b48;
   --bs-btn-disabled-color: #cc3355;
   --bs-btn-disabled-border-color: #cc3355;
-  --bs-btn-focus-shadow-rgb: 204, 51, 85;
 }
 
 .nav-pills {
-  --bs-nav-pills-link-active-bg: #7c5cd9;
+  --bs-nav-pills-link-active-bg: var(--kd-accent);
+  --bs-nav-link-color: var(--kd-accent-text);
+  --bs-nav-link-hover-color: var(--kd-accent-hover);
+}
+
+.text-primary {
+  color: var(--kd-accent-text) !important;
 }
 
 .form-control:focus,
 .form-select:focus {
-  border-color: #b3a1ec;
-  box-shadow: 0 0 0 0.25rem rgba(124, 92, 217, 0.25);
+  border-color: var(--kd-accent-ring);
+  box-shadow: 0 0 0 0.25rem var(--kd-accent-glow);
 }
 
 .form-check-input:checked {
-  background-color: #7c5cd9;
-  border-color: #7c5cd9;
+  background-color: var(--kd-accent);
+  border-color: var(--kd-accent);
 }
 
 .form-check-input:focus {
-  border-color: #b3a1ec;
-  box-shadow: 0 0 0 0.25rem rgba(124, 92, 217, 0.25);
+  border-color: var(--kd-accent-ring);
+  box-shadow: 0 0 0 0.25rem var(--kd-accent-glow);
 }
 
-/* Navbar: soft violet-to-berry gradient instead of a flat corporate blue */
+/* Navbar: the theme's two accents as a gradient */
 .app-navbar {
-  background: linear-gradient(100deg, #7c5cd9 0%, #9b5cc7 100%);
+  background: linear-gradient(100deg, var(--kd-accent) 0%, var(--kd-accent-2) 100%);
 }
 
 /* Chore chart table */
@@ -174,13 +239,13 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
 }
 
 .chore-table thead th.today-col {
-  color: #7c5cd9;
+  color: var(--kd-accent-text);
 }
 
 /* Today's column: tinted as a background *image* so it layers over whatever
    background-color the zebra stripe or row hover sets, instead of fighting it. */
 .chore-table .today-col {
-  background-image: linear-gradient(rgba(124, 92, 217, 0.11), rgba(124, 92, 217, 0.11));
+  background-image: linear-gradient(var(--kd-tint), var(--kd-tint));
 }
 
 .chore-table thead th.today-col {
@@ -207,9 +272,7 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   --kd-late: #d9a441;
   --kd-late-bg: #fff4dc;
   --kd-late-fg: #8a5a00;
-  --kd-card: #fff;
   --kd-muted: #6b7280;
-  --kd-item-bg: #f8f9fb;
   --kd-away: rgba(107, 114, 128, 0.08);
 }
 
@@ -354,8 +417,8 @@ button.av {
 
 .av.shared.todo {
   opacity: 1;
-  color: #7c5cd9;
-  border-color: #7c5cd9;
+  color: var(--kd-accent-text);
+  border-color: var(--kd-accent-text);
 }
 
 .av.shared.missed {
@@ -559,7 +622,7 @@ button.board-item {
 
 @media (hover: hover) {
   button.board-item:not(.done):hover {
-    border-color: color-mix(in srgb, var(--kid-color, #7c5cd9) 45%, transparent);
+    border-color: color-mix(in srgb, var(--kid-color, var(--kd-accent)) 45%, transparent);
   }
 }
 
@@ -670,7 +733,7 @@ button.board-item:active {
   align-items: center;
   gap: 0.6rem;
   width: 100%;
-  border: 2px solid #dee2e6;
+  border: 2px solid var(--kd-line);
   border-radius: 12px;
   background: #fff;
   padding: 0.55rem 0.8rem;
@@ -749,7 +812,7 @@ button.board-item:active {
 /* ============ PIN login screen ============ */
 
 .login-backdrop {
-  background: linear-gradient(160deg, #f3f0ff 0%, #fafafa 45%, #fff4ea 100%);
+  background: var(--kd-bg);
 }
 
 .login-card {
@@ -757,7 +820,7 @@ button.board-item:active {
   background: var(--bs-card-bg, #fff);
   border-radius: 20px;
   padding: 1.75rem 1.5rem;
-  box-shadow: 0 12px 32px rgba(124, 92, 217, 0.16);
+  box-shadow: 0 12px 32px var(--kd-shadow);
   animation: login-card-in 0.25s ease;
 }
 
@@ -794,13 +857,8 @@ button.board-item:active {
 
 /* ============ Dark mode (on top of data-bs-theme="dark") ============ */
 
-[data-bs-theme="dark"] body,
-body[data-bs-theme="dark"] {
-  background: linear-gradient(160deg, #1a1730 0%, #111827 50%, #1b2032 100%) !important;
-}
-
 [data-bs-theme="dark"] .card {
-  background-color: #1f2937;
+  background-color: var(--kd-card);
 }
 
 [data-bs-theme="dark"] .list-group-item {
@@ -813,15 +871,15 @@ body[data-bs-theme="dark"] {
 
 [data-bs-theme="dark"] .chore-table thead th {
   color: #9ca3af;
-  border-bottom-color: #374151;
+  border-bottom-color: var(--kd-line);
 }
 
 [data-bs-theme="dark"] .chore-table thead th.today-col {
-  color: var(--kd-primary-light);
+  color: var(--kd-accent-text);
 }
 
 [data-bs-theme="dark"] .chore-table .today-col {
-  background-image: linear-gradient(rgba(164, 139, 239, 0.16), rgba(164, 139, 239, 0.16));
+  background-image: linear-gradient(var(--kd-tint), var(--kd-tint));
 }
 
 @media (hover: hover) {
@@ -831,13 +889,13 @@ body[data-bs-theme="dark"] {
 }
 
 [data-bs-theme="dark"] .pick-kid-btn {
-  border-color: #4b5563;
-  background: #111827;
+  border-color: var(--kd-line);
+  background: var(--kd-item-bg);
 }
 
 [data-bs-theme="dark"] .pick-kid-btn:hover {
   border-color: var(--kid-color);
-  background: color-mix(in srgb, var(--kid-color) 18%, #111827);
+  background: color-mix(in srgb, var(--kid-color) 18%, var(--kd-item-bg));
 }
 
 [data-bs-theme="dark"] .chore-pts {
@@ -850,7 +908,7 @@ body[data-bs-theme="dark"] {
 }
 
 [data-bs-theme="dark"] .badge.text-bg-light {
-  background-color: #374151 !important;
+  background-color: var(--kd-line) !important;
   color: #e5e7eb !important;
 }
 
@@ -867,35 +925,29 @@ body[data-bs-theme="dark"] {
   color: #6b7280;
 }
 
-[data-bs-theme="dark"] .login-backdrop {
-  background: linear-gradient(160deg, #111827 0%, #1f2937 55%, #1e293b 100%);
-}
-
 [data-bs-theme="dark"] .login-card {
-  background: #1f2937;
+  background: var(--kd-card);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 [data-bs-theme="dark"] {
-  --kd-av-ring: #4b5563;
+  --kd-av-ring: var(--kd-line);
   --kd-missed: #f07288;
   --kd-missed-bg: #3b1820;
   --kd-late: #d9a441;
   --kd-late-bg: #3a2c0c;
   --kd-late-fg: #ffd27a;
-  --kd-card: #1f2937;
   --kd-muted: #9ca3af;
-  --kd-item-bg: #111827;
   --kd-away: rgba(255, 255, 255, 0.05);
 }
 
 [data-bs-theme="dark"] .chore-table tbody tr.group-row > th {
-  border-bottom-color: #374151;
+  border-bottom-color: var(--kd-line);
 }
 
 [data-bs-theme="dark"] .av.shared.todo {
-  color: var(--kd-primary-light);
-  border-color: var(--kd-primary-light);
+  color: var(--kd-accent-text);
+  border-color: var(--kd-accent-text);
 }
 
 [data-bs-theme="dark"] .kid-board {
@@ -905,4 +957,68 @@ body[data-bs-theme="dark"] {
 [data-bs-theme="dark"] .board-pts {
   background: #423818;
   color: #facc15;
+}
+
+/* ---------- Theme picker (navbar dropdown) ---------- */
+.theme-menu {
+  width: 290px;
+  border-radius: 1rem;
+  border-color: var(--kd-line);
+  box-shadow: 0 12px 32px var(--kd-shadow);
+}
+
+.theme-menu-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--kd-muted);
+  margin-bottom: 0.4rem;
+}
+
+.theme-swatches {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.4rem;
+}
+
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 2px solid transparent;
+  border-radius: 0.7rem;
+  background: var(--kd-item-bg);
+  color: var(--bs-body-color);
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.theme-swatch:hover {
+  border-color: var(--kd-line);
+}
+
+.theme-swatch.active {
+  border-color: var(--kd-accent-text);
+}
+
+.theme-swatch-chip {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.theme-menu-note {
+  margin-top: 0.6rem;
+  font-size: 0.72rem;
+  color: var(--kd-muted);
+  text-align: center;
 }

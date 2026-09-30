@@ -1383,35 +1383,69 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));
 });
 
-/* ============================ Theme toggle ============================ */
+/* ============================ Theme picker ============================ */
+
+// Eight palettes × light/dark, chosen per device. The CSS owns the colors
+// (data-kd-theme on <html>); `swatch` here is just for drawing the picker.
+const THEMES = [
+  { id: 'grape', name: 'Grape', swatch: ['#7c5cd9', '#9b5cc7'] },
+  { id: 'ocean', name: 'Ocean', swatch: ['#2563eb', '#0e7490'] },
+  { id: 'mint', name: 'Mint', swatch: ['#0f766e', '#047857'] },
+  { id: 'forest', name: 'Forest', swatch: ['#3f7d3a', '#6b6a1f'] },
+  { id: 'sunshine', name: 'Sunshine', swatch: ['#b45309', '#a16207'] },
+  { id: 'sunset', name: 'Sunset', swatch: ['#c2410c', '#be185d'] },
+  { id: 'bubblegum', name: 'Bubblegum', swatch: ['#db2777', '#a21caf'] },
+  { id: 'slate', name: 'Slate', swatch: ['#475569', '#334155'] },
+];
 
 (function () {
   const root = document.documentElement;
-  const btn = document.getElementById('themeToggle');
-  if (!btn) return;
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const store = {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* unavailable */ } },
+  };
 
-  function apply(theme) {
-    root.setAttribute('data-bs-theme', theme);
-    const dark = theme === 'dark';
-    btn.querySelector('.theme-icon-dark').classList.toggle('d-none', !dark);
-    btn.querySelector('.theme-icon-light').classList.toggle('d-none', dark);
-    btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  const mode = () => store.get('kiddodash-theme') || 'auto';
+  const applyMode = () => {
+    const m = mode();
+    root.setAttribute('data-bs-theme', m === 'auto' ? (mq.matches ? 'dark' : 'light') : m);
+  };
+  const palette = () => (THEMES.some((t) => t.id === store.get('kiddodash-palette')) ? store.get('kiddodash-palette') : 'grape');
+
+  function renderPicker() {
+    const current = palette();
+    document.getElementById('themeSwatches').innerHTML = THEMES.map(
+      (t) => `<button type="button" class="theme-swatch${t.id === current ? ' active' : ''}" data-theme="${t.id}" aria-pressed="${t.id === current}">
+          <span class="theme-swatch-chip" style="background:linear-gradient(135deg, ${t.swatch[0]}, ${t.swatch[1]})">${t.id === current ? '<i class="bi bi-check-lg"></i>' : ''}</span>
+          <span>${t.name}</span>
+        </button>`
+    ).join('');
+    for (const m of ['light', 'dark', 'auto']) {
+      document.getElementById('mode' + m[0].toUpperCase() + m.slice(1)).checked = mode() === m;
+    }
   }
 
-  // Follow the system until the user picks a preference
-  mq.addEventListener('change', () => {
-    if (!localStorage.getItem('kiddodash-theme')) apply(mq.matches ? 'dark' : 'light');
-  });
+  mq.addEventListener('change', applyMode); // only matters in auto
 
-  btn.addEventListener('click', () => {
-    const next = root.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('kiddodash-theme', next);
-    apply(next);
+  document.addEventListener('DOMContentLoaded', () => {
+    root.setAttribute('data-kd-theme', palette());
+    applyMode();
+    renderPicker();
+    document.getElementById('themeSwatches').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-theme]');
+      if (!btn) return;
+      store.set('kiddodash-palette', btn.dataset.theme);
+      root.setAttribute('data-kd-theme', btn.dataset.theme);
+      renderPicker();
+    });
+    document.querySelectorAll('input[name="themeMode"]').forEach((input) =>
+      input.addEventListener('change', () => {
+        store.set('kiddodash-theme', input.value === 'auto' ? null : input.value);
+        applyMode();
+      })
+    );
   });
-
-  // Sync icon with whatever the inline head script already applied
-  apply(root.getAttribute('data-bs-theme') || 'light');
 })();
 
 /* ============================ Confirm dialog ============================ */
