@@ -97,7 +97,7 @@ body {
   background: var(--kd-bg) !important;
 }
 
-h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
+h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .app-tabs .nav-link {
   font-weight: 700;
 }
 
@@ -182,10 +182,138 @@ h1, h2, h3, h4, h5, h6, .navbar-brand, .btn, .nav-pills .nav-link {
   --bs-btn-disabled-border-color: #cc3355;
 }
 
-.nav-pills {
-  --bs-nav-pills-link-active-bg: var(--kd-accent);
-  --bs-nav-link-color: var(--kd-accent-text);
-  --bs-nav-link-hover-color: var(--kd-accent-hover);
+/* ---------- App bar: brand, section tabs, controls ----------
+   Tabs sit in the top bar on tablets and up; on phones the same list becomes
+   a bottom tab bar (thumb reach, like a native app). One element, CSS only. */
+.navbar > .app-bar { /* beats Bootstrap's .navbar > .container { flex-wrap: inherit } */
+  flex-wrap: nowrap;
+  gap: 0.75rem;
+}
+
+.app-bar .navbar-brand {
+  margin-right: 0.5rem;
+}
+
+.app-tabs {
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+  margin-right: auto;
+}
+
+.app-tabs .nav-item:has(> .d-none) {
+  display: none; /* e.g. Activity/Settings for kids */
+}
+
+.app-tabs .nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.82);
+  white-space: nowrap;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.app-tabs .nav-link:hover,
+.app-tabs .nav-link:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.app-tabs .nav-link.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.app-tabs .nav-link .badge {
+  font-size: 0.65rem;
+}
+
+.app-controls {
+  flex-shrink: 0;
+}
+
+/* Tablet widths: tighter tabs so everything fits on one row */
+@media (min-width: 768px) and (max-width: 991.98px) {
+  .app-tabs .nav-link {
+    padding: 0.4rem 0.6rem;
+  }
+
+  .app-controls .theme-label {
+    display: none !important;
+  }
+
+  .app-tabs .nav-link > .bi {
+    display: none; /* words only at this width */
+  }
+}
+
+/* Phones: bottom tab bar */
+@media (max-width: 767.98px) {
+  .app-tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1030;
+    margin: 0;
+    gap: 0;
+    justify-content: space-around;
+    background: var(--kd-card);
+    border-top: 1px solid var(--kd-line);
+    box-shadow: 0 -4px 16px var(--kd-shadow);
+    padding: 0.3rem 0.3rem calc(0.3rem + env(safe-area-inset-bottom));
+  }
+
+  .app-tabs .nav-item {
+    flex: 1;
+  }
+
+  .app-tabs .nav-link {
+    position: relative;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 0.35rem 0;
+    border-radius: 0.8rem;
+    font-size: 0.7rem;
+    color: var(--kd-muted);
+  }
+
+  .app-tabs .nav-link .bi {
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+
+  .app-tabs .nav-link:hover,
+  .app-tabs .nav-link:focus-visible {
+    color: var(--kd-accent-text);
+    background: transparent;
+  }
+
+  .app-tabs .nav-link.active {
+    color: var(--kd-accent-text);
+    background: var(--kd-tint);
+    box-shadow: none;
+  }
+
+  .app-tabs .nav-link .badge {
+    position: absolute;
+    top: 2px;
+    left: calc(50% + 6px);
+    margin: 0 !important;
+  }
+
+  /* room for the bar, and keep toasts above it */
+  body {
+    padding-bottom: calc(4.4rem + env(safe-area-inset-bottom));
+  }
+
+  .toast.position-fixed.bottom-0 {
+    bottom: calc(4.4rem + env(safe-area-inset-bottom)) !important;
+  }
 }
 
 .text-primary {
