@@ -117,45 +117,18 @@
     </div>
   </div>
 
-  <!-- ============ SETTINGS TAB (setup screens: kids + chores) ============ -->
+  <!-- ============ SETTINGS TAB ============
+       Ordered by how often each part changes: chores (weekly), schedule
+       (now and then), family & sign-in (set up once). -->
   <div class="tab-pane fade" id="pane-settings" role="tabpanel" aria-labelledby="tab-settings">
-  <!-- ============ KIDS SECTION ============ -->
-  <section class="settings-section" id="pane-kids">
-    <h5 class="settings-section-title"><i class="bi bi-people me-1"></i>Kids</h5>
-    <div class="row g-4">
-      <div class="col-lg-5">
-        <div class="card shadow-sm">
-          <div class="card-header"><i class="bi bi-person-plus me-1"></i>Add a kid</div>
-          <div class="card-body">
-            <form id="kidForm" class="vstack gap-2">
-              <div class="input-group input-group-sm">
-                <span class="input-group-text"><i class="bi bi-emoji-smile"></i></span>
-                <input class="form-control" id="kidEmoji" maxlength="4" placeholder="🙂">
-                <span class="input-group-text">Name</span>
-                <input class="form-control" id="kidName" placeholder="Alex" required>
-                <input type="color" class="form-control form-control-color" id="kidColor" value="#7c3aed" title="Pick a color">
-              </div>
-              <div class="input-group input-group-sm">
-                <span class="input-group-text"><i class="bi bi-key"></i></span>
-                <input type="password" inputmode="numeric" maxlength="4" class="form-control"
-                       id="kidPin" placeholder="4-digit PIN (optional)">
-              </div>
-              <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-plus-lg me-1"></i>Add kid</button>
-            </form>
-          </div>
-        </div>
-      </div>
-      <div class="col-lg-7">
-        <div class="card shadow-sm">
-          <div class="card-header"><i class="bi bi-people me-1"></i>Your kids</div>
-          <ul class="list-group list-group-flush" id="kidsList"></ul>
-        </div>
-      </div>
-    </div>
-  </section>
+  <nav class="settings-jump" aria-label="Settings sections">
+    <button type="button" data-jump="set-chores"><i class="bi bi-list-check me-1"></i>Chores</button>
+    <button type="button" data-jump="set-schedule"><i class="bi bi-calendar-week me-1"></i>Schedule</button>
+    <button type="button" data-jump="set-family"><i class="bi bi-people me-1"></i>Family &amp; sign-in</button>
+  </nav>
 
   <!-- ============ CHORES SECTION ============ -->
-  <section class="settings-section" id="pane-chores">
+  <section class="settings-section" id="set-chores">
     <h5 class="settings-section-title"><i class="bi bi-list-check me-1"></i>Chores</h5>
     <div class="row g-4">
       <div class="col-lg-5">
@@ -193,13 +166,13 @@
     </div>
   </section>
 
-  <!-- ============ GENERAL SECTION ============ -->
-  <section class="settings-section" id="pane-general">
-    <h5 class="settings-section-title"><i class="bi bi-sliders me-1"></i>General</h5>
+  <!-- ============ SCHEDULE SECTION ============ -->
+  <section class="settings-section" id="set-schedule">
+    <h5 class="settings-section-title"><i class="bi bi-calendar-week me-1"></i>Schedule</h5>
     <div class="row g-4">
-      <div class="col-lg-6">
+      <div class="col-lg-5">
         <div class="card shadow-sm">
-          <div class="card-header"><i class="bi bi-calendar-week me-1"></i>Chart</div>
+          <div class="card-header"><i class="bi bi-calendar-week me-1"></i>Chart week</div>
           <div class="card-body">
             <label class="form-label small fw-bold" for="weekStartDay">Week starts on</label>
             <select class="form-select form-select-sm" id="weekStartDay" style="max-width:220px">
@@ -215,7 +188,7 @@
           </div>
         </div>
       </div>
-      <div class="col-lg-6">
+      <div class="col-lg-7">
         <div class="card shadow-sm">
           <div class="card-header"><i class="bi bi-house-heart me-1"></i>Custody schedule</div>
           <div class="card-body">
@@ -245,27 +218,48 @@
     </div>
   </section>
 
-  <!-- ============ ACCESS SECTION (PINs) ============ -->
-  <section class="settings-section" id="pane-access">
-    <h5 class="settings-section-title"><i class="bi bi-shield-lock me-1"></i>Access</h5>
+  <!-- ============ FAMILY & SIGN-IN SECTION ============ -->
+  <section class="settings-section" id="set-family">
+    <h5 class="settings-section-title"><i class="bi bi-people me-1"></i>Family &amp; sign-in</h5>
     <div class="row g-4">
-      <div class="col-lg-6" id="accessAdminCard">
+      <div class="col-lg-7">
         <div class="card shadow-sm">
-          <div class="card-header"><i class="bi bi-shield-lock me-1"></i>Admin PIN</div>
-          <div class="card-body">
-            <form id="adminPinForm" class="d-flex gap-2">
-              <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
-                     id="adminPinInput" placeholder="New admin PIN (4-8 digits)" style="max-width:240px">
-              <button class="btn btn-primary btn-sm" type="submit">Save</button>
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-people me-1"></i>Kids</span>
+            <button class="btn btn-sm btn-outline-primary" type="button" id="btnShowKidForm"><i class="bi bi-person-plus me-1"></i>Add a kid</button>
+          </div>
+          <ul class="list-group list-group-flush" id="kidsList"></ul>
+          <div class="card-body border-top d-none" id="kidFormWrap">
+            <form id="kidForm" class="vstack gap-2">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text"><i class="bi bi-emoji-smile"></i></span>
+                <input class="form-control" id="kidEmoji" maxlength="4" placeholder="🙂">
+                <span class="input-group-text">Name</span>
+                <input class="form-control" id="kidName" placeholder="Alex" required>
+                <input type="color" class="form-control form-control-color" id="kidColor" value="#7c3aed" title="Pick a color">
+              </div>
+              <div class="input-group input-group-sm">
+                <span class="input-group-text"><i class="bi bi-key"></i></span>
+                <input type="password" inputmode="numeric" maxlength="4" class="form-control"
+                       id="kidPin" placeholder="4-digit PIN (optional)">
+              </div>
+              <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-plus-lg me-1"></i>Add kid</button>
             </form>
-            <p class="text-muted small mt-2 mb-0">The admin PIN unlocks everything: kids, chores, rewards, and undoing anyone's check-offs.</p>
           </div>
         </div>
       </div>
-      <div class="col-lg-6" id="accessKidsCard">
+      <div class="col-lg-5">
         <div class="card shadow-sm">
-          <div class="card-header"><i class="bi bi-people me-1"></i>Kid PINs</div>
-          <ul class="list-group list-group-flush" id="kidPinsList"></ul>
+          <div class="card-header"><i class="bi bi-shield-lock me-1"></i>Parent PIN</div>
+          <div class="card-body">
+            <form id="adminPinForm" class="d-flex gap-2">
+              <input type="password" inputmode="numeric" autocomplete="off" class="form-control form-control-sm"
+                     id="adminPinInput" placeholder="New parent PIN (4-8 digits)" style="max-width:240px">
+              <button class="btn btn-primary btn-sm" type="submit">Save</button>
+            </form>
+            <p class="text-muted small mt-2 mb-0">Unlocks everything: chores, kids, rewards, the activity log, and undoing
+              anyone's check-offs. Set this before giving kids their own PINs.</p>
+          </div>
         </div>
       </div>
     </div>

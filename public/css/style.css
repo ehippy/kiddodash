@@ -1431,3 +1431,58 @@ button.board-item:active {
   font-size: 0.85rem;
   padding: 0.15rem 0;
 }
+
+/* ---------- Settings: section jump bar ---------- */
+.settings-jump {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: -0.5rem -0.25rem 1.25rem;
+  padding: 0.5rem 0.25rem;
+  background: color-mix(in srgb, var(--kd-card) 82%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 0 0 0.9rem 0.9rem;
+}
+
+.settings-jump::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-jump button {
+  flex-shrink: 0;
+  border: 1px solid var(--kd-line);
+  border-radius: 999px;
+  background: var(--kd-card);
+  color: var(--bs-body-color);
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.85rem;
+}
+
+.settings-jump button:hover {
+  border-color: var(--kd-accent-text);
+}
+
+.settings-jump button.active {
+  background: var(--kd-accent);
+  border-color: var(--kd-accent);
+  color: #fff;
+}
+
+/* sections land below the sticky jump bar */
+#pane-settings .settings-section {
+  scroll-margin-top: 4rem;
+}
+
+.kid-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.1rem;
+}

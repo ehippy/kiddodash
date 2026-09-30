@@ -683,13 +683,12 @@ async function refreshWeek() {
   state.currentGrid = (current || data).grid; // the Today board always shows this week
   state.currentDates = (current || data).week.map((w) => w.date);
   renderChart();
-  if (!$('#pane-general').contains(document.activeElement)) {
+  if (!$('#set-schedule').contains(document.activeElement)) {
     $('#weekStartDay').value = String(state.settings.weekStartDay ?? 1);
     renderCustodySettings();
   }
   loadKidsTab();
   loadChoresTab();
-  loadAccessTab(); // Settings is one scrolling page now — keep every section in sync
   applyRoleUI(); // re-apply after re-render (chart buttons depend on role)
 }
 
@@ -985,10 +984,12 @@ function loadKidsTab() {
         <div class="d-flex align-items-center gap-3">
           <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
           <div class="flex-grow-1">
-            <div class="d-flex justify-content-between align-items-baseline">
-              <span class="fw-bold">${esc(k.name)}</span>
-              <span class="kid-points-badge text-primary">${pts} pts
-                ${spent ? `<span class="text-muted small" title="${spent} points spent on rewards">(${spent} spent)</span>` : ''}
+            <div class="fw-bold">${esc(k.name)}</div>
+            <div class="kid-row-meta">
+              <span class="kid-points-badge text-primary">${pts} pts</span>
+              ${spent ? `<span class="text-muted small" title="${spent} points spent on rewards">${spent} spent</span>` : ''}
+              <span class="badge ${k.hasPin ? 'text-bg-success' : 'text-bg-light'}" title="${k.hasPin ? 'Can sign in with their own PIN' : 'No PIN — can’t sign in on their own'}">
+                <i class="bi bi-key me-1"></i>${k.hasPin ? 'PIN set' : 'no PIN'}
               </span>
             </div>
           </div>
@@ -1004,31 +1005,6 @@ function loadKidsTab() {
 
 /* ============================ Access tab ============================ */
 
-function loadAccessTab() {
-  const admin = isAdmin();
-  $('#accessAdminCard').classList.toggle('d-none', !admin);
-  $('#accessKidsCard').classList.toggle('d-none', !admin);
-  const list = $('#kidPinsList');
-  if (!list) return;
-  if (!state.kids.length) {
-    list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-people"></i>No kids yet.</li>';
-    return;
-  }
-  list.innerHTML = state.kids
-    .map(
-      (k) => `<li class="list-group-item">
-        <div class="d-flex align-items-center gap-3">
-          <span class="kid-avatar" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
-          <span class="fw-bold flex-grow-1">${esc(k.name)}</span>
-          <span class="badge ${k.hasPin ? 'text-bg-success' : 'text-bg-secondary'}">${k.hasPin ? 'PIN set' : 'no PIN'}</span>
-          <button class="btn btn-sm btn-outline-primary" data-editkid="${k.id}">
-            <i class="bi bi-key me-1"></i>${k.hasPin ? 'Change' : 'Set PIN'}
-          </button>
-        </div>
-      </li>`
-    )
-    .join('');
-}
 
 /* ============================ Chores tab ============================ */
 
@@ -1237,11 +1213,40 @@ document.addEventListener('DOMContentLoaded', () => {
       toast(`${kid.emoji} ${kid.name} added!`);
       $('#kidName').value = '';
       $('#kidPin').value = '';
+      $('#kidFormWrap').classList.add('d-none');
       await refreshAuth();
       await refreshWeek();
     } catch (err) {
       toast(err.message, 'danger');
     }
+  });
+
+  // Settings: jump links scroll to a section and track the one in view
+  $('.settings-jump').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-jump]');
+    if (btn) document.getElementById(btn.dataset.jump).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  const jumpSpy = new IntersectionObserver(
+    (entries) => {
+      for (const en of entries) {
+        if (en.isIntersecting) markJump(en.target.id);
+      }
+    },
+    { rootMargin: '-45% 0px -50% 0px' } // "in view" = crossing the middle of the screen
+  );
+  document.querySelectorAll('#pane-settings .settings-section').forEach((sec) => jumpSpy.observe(sec));
+  // The last section can't reach mid-screen on a tall display: at the bottom, it wins.
+  const markJump = (id) =>
+    document.querySelectorAll('.settings-jump [data-jump]').forEach((b) => b.classList.toggle('active', b.dataset.jump === id));
+  window.addEventListener('scroll', () => {
+    if (!$('#pane-settings').classList.contains('active')) return;
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) markJump('set-family');
+  }, { passive: true });
+
+  $('#btnShowKidForm').addEventListener('click', () => {
+    const wrap = $('#kidFormWrap');
+    wrap.classList.toggle('d-none');
+    if (!wrap.classList.contains('d-none')) $('#kidName').focus();
   });
 
   // Kids list actions (delegated)
@@ -1628,10 +1633,6 @@ document.addEventListener('DOMContentLoaded', () => {
     kidEditModal().show();
   }
 
-  $('#kidPinsList').addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-editkid]');
-    if (btn) openKidEditModal(Number(btn.dataset.editkid));
-  });
 
   $('#kidPinForm').addEventListener('submit', async (e) => {
     e.preventDefault();
