@@ -46,6 +46,7 @@ db.exec(`
                 CHECK (frequency IN ('daily', 'weekly', 'personal', 'schooldays', 'due_by', 'anytime')),
     days        TEXT, -- comma-separated day-of-week ints (0=Sun..6=Sat), e.g. '1,4'
     cooldown_days INTEGER, -- 'anytime' only: at most once per this many days
+    kid_ids     TEXT, -- each-kid chores only: comma-separated kid ids it's for; NULL = every kid
     active      INTEGER NOT NULL DEFAULT 1
   );
 
@@ -268,6 +269,12 @@ function migrate() {
       CREATE INDEX IF NOT EXISTS idx_completions_date ON completions(done_date);
     `);
     console.log('migrated: completions now unique per kid');
+  }
+
+  if (!/kid_ids\s+TEXT/.test(tableSql('chores'))) {
+    // Nullable, so no rebuild: existing chores stay for every kid.
+    db.exec('ALTER TABLE chores ADD COLUMN kid_ids TEXT');
+    console.log('migrated: each-kid chores can be for just some kids');
   }
 
   const kidsSql = tableSql('kids');
@@ -783,6 +790,12 @@ app.delete('/api/kids/:id', requireAdmin, (req, res) => {
     // same transaction as the kid row itself.
     const info = inTransaction(() => {
       prepare('DELETE FROM sessions WHERE kid_id = ?').run(req.params.id);
+      // Take them off chores meant for just some kids; one left for nobody is paused.
+      for (const c of prepare('SELECT id, kid_ids FROM chores WHERE kid_ids IS NOT NULL').all()) {
+        const rest = parseDays(c.kid_ids).filter((id) => id !== Number(req.params.id));
+        if (rest.length) prepare('UPDATE chores SET kid_ids = ? WHERE id = ?').run(rest.join(','), c.id);
+        else prepare('UPDATE chores SET kid_ids = NULL, active = 0 WHERE id = ?').run(c.id);
+      }
       return prepare('DELETE FROM kids WHERE id = ?').run(req.params.id);
     });
     if (info.changes === 0) return sendError(res, 404, 'Kid not found');
@@ -824,6 +837,16 @@ function encodeDays(days) {
   return days && days.length ? days.join(',') : null;
 }
 
+// Which kids an each-kid chore is for. NULL means every kid (including ones
+// added later), so picking everyone -- or no one -- is stored as NULL too.
+// Shared chores are anyone's, so they never keep a list.
+function normalizeKidIds(freq, ids) {
+  if (SHARED.has(freq) || !Array.isArray(ids)) return null;
+  const all = prepare('SELECT id FROM kids').all().map((k) => k.id);
+  const picked = [...new Set(ids.map(Number))].filter((id) => all.includes(id)).sort((a, b) => a - b);
+  return picked.length && picked.length < all.length ? picked.join(',') : null;
+}
+
 // A 'weekly' chore needs at least one day to ever come due, so days can't be
 // left empty; 'daily'/'schooldays' ignore whatever days are stored, so they're
 // cleared to avoid a stale value lingering after a frequency change. 'personal'
@@ -840,15 +863,15 @@ function normalizeChoreDays(freq, days) {
 }
 
 app.post('/api/chores', requireAdmin, (req, res) => {
-  const { title, points, frequency, days, cooldownDays } = req.body || {};
+  const { title, points, frequency, days, cooldownDays, kidIds } = req.body || {};
   if (!title || !String(title).trim()) return sendError(res, 400, 'Title is required');
   const freq = FREQUENCIES.includes(frequency) ? frequency : 'weekly';
   const normalizedDays = normalizeChoreDays(freq, days);
   const pts = Number.isInteger(Number(points)) && Number(points) > 0 ? Number(points) : 1;
   try {
     const info = prepare(
-      `INSERT INTO chores (title, points, frequency, days, cooldown_days) VALUES (?, ?, ?, ?, ?)`
-    ).run(String(title).trim(), pts, freq, encodeDays(normalizedDays), normalizeCooldown(freq, cooldownDays));
+      `INSERT INTO chores (title, points, frequency, days, cooldown_days, kid_ids) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(String(title).trim(), pts, freq, encodeDays(normalizedDays), normalizeCooldown(freq, cooldownDays), normalizeKidIds(freq, kidIds));
     res.status(201).json(prepare('SELECT * FROM chores WHERE id = ?').get(info.lastInsertRowid));
   } catch (e) {
     sendError(res, 500, e.message);
@@ -873,9 +896,10 @@ app.put('/api/chores/:id', requireAdmin, (req, res) => {
   const active =
     req.body.active !== undefined ? (req.body.active ? 1 : 0) : chore.active;
   const cooldown = normalizeCooldown(frequency, req.body.cooldownDays !== undefined ? req.body.cooldownDays : chore.cooldown_days);
+  const kidIds = normalizeKidIds(frequency, req.body.kidIds !== undefined ? req.body.kidIds : parseDays(chore.kid_ids));
 
-  prepare('UPDATE chores SET title = ?, points = ?, frequency = ?, days = ?, cooldown_days = ?, active = ? WHERE id = ?').run(
-    title, points, frequency, encodeDays(normalizedDays), cooldown, active, chore.id
+  prepare('UPDATE chores SET title = ?, points = ?, frequency = ?, days = ?, cooldown_days = ?, kid_ids = ?, active = ? WHERE id = ?').run(
+    title, points, frequency, encodeDays(normalizedDays), cooldown, kidIds, active, chore.id
   );
   res.json(prepare('SELECT * FROM chores WHERE id = ?').get(chore.id));
 });
@@ -954,6 +978,8 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
   if (kids.some((k) => !k)) return sendError(res, 404, 'Kid not found');
   const shared = SHARED.has(chore.frequency);
   if (kids.length > 1 && !shared) return sendError(res, 400, 'Each kid checks this one off themselves');
+  const forKids = parseDays(chore.kid_ids);
+  if (forKids && !forKids.includes(kids[0].id)) return sendError(res, 400, `“${chore.title}” isn’t one of ${kids[0].name}’s chores`);
 
   const doneDate = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : todayStr();
   // Kids check off today only; filling in other days is a parent's call. ±1 day
@@ -1098,6 +1124,7 @@ app.get('/api/week', (req, res) => {
       frequency: c.frequency,
       days: parseDays(c.days),
       cooldownDays: c.cooldown_days,
+      kidIds: parseDays(c.kid_ids), // each-kid chores: null = every kid
       lastDone: lastDone.get(c.id) || null, // anytime jobs: most recent completion, any week
       active: !!c.active
     }))

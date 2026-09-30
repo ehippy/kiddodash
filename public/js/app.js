@@ -154,20 +154,22 @@ function restingUntil(chore, today) {
   return next > today ? next : null;
 }
 
+const whoLower = (chore) => (chore.kidIds ? choreWhoText(chore) : 'each kid');
+
 function freqBadgeHtml(chore) {
   if (chore.frequency === 'anytime') {
     return `<span class="badge text-bg-success freq-badge">anytime · ${esc(cooldownText(chore.cooldownDays))}</span>`;
   }
   if (chore.frequency === 'due_by') {
-    return `<span class="badge text-bg-primary freq-badge">each kid, by ${DAY_NAMES[chore.days?.[0]] ?? '?'}</span>`;
+    return `<span class="badge text-bg-primary freq-badge">${esc(whoLower(chore))}, by ${DAY_NAMES[chore.days?.[0]] ?? '?'}</span>`;
   }
   if (chore.frequency === 'daily') return '<span class="badge text-bg-info freq-badge">daily</span>';
-  if (chore.frequency === 'schooldays') return '<span class="badge text-bg-info freq-badge">each kid, school nights</span>';
+  if (chore.frequency === 'schooldays') return `<span class="badge text-bg-info freq-badge">${esc(whoLower(chore))}, school nights</span>`;
   const daysLabel = chore.days && chore.days.length
     ? sortByWeekOrder(chore.days).map((d) => DAY_NAMES[d]).join(', ')
     : null;
   if (chore.frequency === 'personal') {
-    return `<span class="badge text-bg-primary freq-badge">each kid, ${daysLabel || 'daily'}</span>`;
+    return `<span class="badge text-bg-primary freq-badge">${esc(whoLower(chore))}, ${daysLabel || 'daily'}</span>`;
   }
   return `<span class="badge text-bg-secondary freq-badge">${daysLabel}</span>`;
 }
@@ -218,6 +220,34 @@ function renderChoreDaysPicker(container, idPrefix, freq, selectedDays, cooldown
     </div>
     ${freq === 'personal' ? '<div class="form-text">No days picked = every day</div>' : ''}
   `;
+}
+
+// Who an each-kid chore is for: a toggle per kid, all on by default. Hidden for
+// shared chores (anyone can do those) and when there's only one kid.
+function renderChoreKidsPicker(container, idPrefix, freq, kidIds) {
+  if (!PER_KID.has(freq) || state.kids.length < 2) {
+    container.innerHTML = '';
+    return;
+  }
+  const on = (id) => !kidIds || kidIds.includes(id);
+  container.innerHTML = `
+    <label class="form-label small fw-bold mb-1">Who</label>
+    <div class="d-flex flex-wrap gap-1 chore-kids-picker">
+      ${state.kids.map((k) => {
+        const id = `${idPrefix}-${k.id}`;
+        return `<input type="checkbox" class="btn-check" id="${id}" value="${k.id}" autocomplete="off"${on(k.id) ? ' checked' : ''}>
+                <label class="btn btn-sm btn-outline-secondary" for="${id}">${esc(k.emoji)} ${esc(k.name)}</label>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+// null = everyone (the chore also goes to kids added later); undefined = no picker shown.
+function readChoreKidsPicker(container) {
+  const boxes = [...container.querySelectorAll('input[type=checkbox]')];
+  if (!boxes.length) return undefined;
+  const picked = boxes.filter((b) => b.checked).map((b) => Number(b.value));
+  return picked.length === boxes.length ? null : picked;
 }
 
 function readChoreDaysPicker(container) {
@@ -324,6 +354,14 @@ async function doLogin(pin) {
 
 const PER_KID = new Set(['personal', 'schooldays', 'due_by']);
 const isPerKid = (chore) => PER_KID.has(chore.frequency);
+// The kids an each-kid chore is for (kidIds null = everyone).
+const choreKids = (chore) => (chore.kidIds ? state.kids.filter((k) => chore.kidIds.includes(k.id)) : state.kids);
+// "Each kid", or who it's for when that's just some of them ("Leia only").
+function choreWhoText(chore) {
+  if (!chore.kidIds) return 'Each kid';
+  const names = choreKids(chore).map((k) => k.name);
+  return names.length === 1 ? `${names[0]} only` : names.join(' & ') || 'Nobody';
+}
 const canActFor = (kidId) => isAdmin() || myKidId() === kidId;
 const ptsLabel = (n) => `${n} pt${n === 1 ? '' : 's'}`;
 
@@ -338,12 +376,12 @@ function scheduleText(chore) {
     due_by: `once a week, due by ${DAYS_FULL[chore.days?.[0]] ?? '?'}`,
     anytime: `anytime, at most ${cooldownText(chore.cooldownDays)}`,
   }[chore.frequency];
-  return `${isPerKid(chore) ? 'Each kid' : 'Shared — anyone can do it'} · ${when}`;
+  return `${isPerKid(chore) ? choreWhoText(chore) : 'Shared — anyone can do it'} · ${when}`;
 }
 
 const scopeIcon = (chore) =>
   isPerKid(chore)
-    ? '<i class="bi bi-person-fill scope-icon" aria-label="Each kid"></i>'
+    ? `<i class="bi bi-person-fill scope-icon" aria-label="${esc(choreWhoText(chore))}"></i>`
     : chore.frequency === 'anytime'
       ? '<i class="bi bi-stars scope-icon" aria-label="Bonus job"></i>'
       : '<i class="bi bi-people-fill scope-icon" aria-label="Shared"></i>';
@@ -459,7 +497,7 @@ function todayItemsForKid(kid, today, dates) {
   const grid = state.currentGrid || {};
   const dow = new Date().getDay();
   const items = [];
-  for (const chore of state.chores.filter((c) => c.active && isPerKid(c))) {
+  for (const chore of state.chores.filter((c) => c.active && isPerKid(c) && (!c.kidIds || c.kidIds.includes(kid.id)))) {
     if (chore.frequency === 'due_by') {
       const d = doneThisWeek(chore, grid).get(kid.id);
       if (d && d.date !== today) continue;
@@ -638,9 +676,11 @@ function choreCellsHtml(chore, dates, today) {
       const due = choreIsDueOn(chore, d.getDay()) && !isAway(ds);
       const parts = [];
       if (isPerKid(chore)) {
+        // Past check-offs stay visible even for a kid the chore's no longer for.
+        const forKids = choreKids(chore);
         for (const kid of state.kids) {
           if (doneMap[kid.id]) parts.push(avatarHtml(kid, { state: 'done', completion: doneMap[kid.id] }));
-          else if (due) parts.push(avatarHtml(kid, { state: timeState(ds, today), date: ds, choreId: chore.id }));
+          else if (due && forKids.includes(kid)) parts.push(avatarHtml(kid, { state: timeState(ds, today), date: ds, choreId: chore.id }));
         }
       } else {
         const done = Object.values(doneMap);
@@ -662,6 +702,7 @@ function dueByCellsHtml(chore, dates, today) {
   const slotDs = dateStrs.includes(today) ? today : deadline;
   const slotState = slotDs === today ? (today > deadline ? 'late' : 'todo') : slotDs < today ? 'missed' : 'future';
   const weekAway = dateStrs.every(isAway); // a whole away stretch: nothing owed
+  const forKids = choreKids(chore);
   const showSlots = !weekAway && !isAway(slotDs);
   return dateStrs
     .map((ds) => {
@@ -669,7 +710,7 @@ function dueByCellsHtml(chore, dates, today) {
       for (const kid of state.kids) {
         const d = done.get(kid.id);
         if (d?.date === ds) parts.push(avatarHtml(kid, { state: 'done', completion: d.completion, late: ds > deadline }));
-        else if (!d && ds === slotDs && showSlots) parts.push(avatarHtml(kid, { state: slotState, date: ds, choreId: chore.id }));
+        else if (!d && ds === slotDs && showSlots && forKids.includes(kid)) parts.push(avatarHtml(kid, { state: slotState, date: ds, choreId: chore.id }));
       }
       if (ds === deadline && !weekAway) parts.push('<span class="due-tag">due</span>');
       return cellHtml(parts);
@@ -1123,6 +1164,8 @@ function loadKidsTab() {
 /* ============================ Chores tab ============================ */
 
 function loadChoresTab() {
+  // The add form's Who picker follows the kids list, keeping whatever's ticked.
+  renderChoreKidsPicker($('#choreKidsRow'), 'choreKid', $('#choreFreq').value, readChoreKidsPicker($('#choreKidsRow')));
   const list = $('#choresList');
   if (!state.chores.length) {
     list.innerHTML = '<li class="list-group-item empty-state"><i class="bi bi-list-check"></i>No chores yet.</li>';
@@ -1387,9 +1430,12 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#choreFreq').addEventListener('change', (e) => {
     const kept = readChoreDaysPicker($('#choreDaysRow'));
     renderChoreDaysPicker($('#choreDaysRow'), 'choreDay', e.target.value, kept);
+    renderChoreKidsPicker($('#choreKidsRow'), 'choreKid', e.target.value, readChoreKidsPicker($('#choreKidsRow')));
   });
   $('#choreForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const kidIds = readChoreKidsPicker($('#choreKidsRow'));
+    if (kidIds?.length === 0) return toast('Pick at least one kid', 'warning');
     try {
       await api('/api/chores', {
         method: 'POST',
@@ -1398,6 +1444,7 @@ document.addEventListener('DOMContentLoaded', () => {
           frequency: $('#choreFreq').value,
           days: readChoreDaysPicker($('#choreDaysRow')),
           cooldownDays: readCooldown($('#choreDaysRow')),
+          kidIds,
           points: Number($('#chorePoints').value) || 1,
         },
       });
@@ -1448,12 +1495,14 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#choreEditPoints').value = chore.points;
     $('#choreEditFreq').value = chore.frequency;
     renderChoreDaysPicker($('#choreEditDaysRow'), 'choreEditDay', chore.frequency, chore.days || [], chore.cooldownDays || 7);
+    renderChoreKidsPicker($('#choreEditKidsRow'), 'choreEditKid', chore.frequency, chore.kidIds);
     choreEditModal().show();
   }
 
   $('#choreEditFreq').addEventListener('change', (e) => {
     const kept = readChoreDaysPicker($('#choreEditDaysRow'));
     renderChoreDaysPicker($('#choreEditDaysRow'), 'choreEditDay', e.target.value, kept);
+    renderChoreKidsPicker($('#choreEditKidsRow'), 'choreEditKid', e.target.value, readChoreKidsPicker($('#choreEditKidsRow')) ?? choreEditCtx?.kidIds);
   });
 
   $('#choreEditForm').addEventListener('submit', async (e) => {
@@ -1461,6 +1510,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!choreEditCtx) return;
     const title = $('#choreEditTitle').value.trim();
     if (!title) return toast('Title cannot be empty', 'warning');
+    const kidIds = readChoreKidsPicker($('#choreEditKidsRow'));
+    if (kidIds?.length === 0) return toast('Pick at least one kid', 'warning');
     try {
       await api(`/api/chores/${choreEditCtx.id}`, {
         method: 'PUT',
@@ -1469,6 +1520,7 @@ document.addEventListener('DOMContentLoaded', () => {
           frequency: $('#choreEditFreq').value,
           days: readChoreDaysPicker($('#choreEditDaysRow')),
           cooldownDays: readCooldown($('#choreEditDaysRow')),
+          kidIds,
           points: Number($('#choreEditPoints').value) || 1,
         },
       });

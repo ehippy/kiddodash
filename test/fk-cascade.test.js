@@ -104,7 +104,7 @@ test('other endpoints keep their shapes while FKs are enforced', async () => {
     const kids = await srv.api('GET', '/api/kids');
     assert.deepEqual(Object.keys(kids.body[0]).sort(), ['color', 'created_at', 'emoji', 'hasPin', 'id', 'name', 'points']);
     const chores = await srv.api('GET', '/api/chores');
-    assert.deepEqual(Object.keys(chores.body[0]).sort(), ['active', 'cooldown_days', 'days', 'doneToday', 'frequency', 'id', 'points', 'title']);
+    assert.deepEqual(Object.keys(chores.body[0]).sort(), ['active', 'cooldown_days', 'days', 'doneToday', 'frequency', 'id', 'kid_ids', 'points', 'title']);
     const week = await srv.api('GET', '/api/week');
     assert.deepEqual(Object.keys(week.body).sort(), ['chores', 'grid', 'kids', 'week']);
     const completions = await srv.api('GET', '/api/completions?date=2020-06-06');

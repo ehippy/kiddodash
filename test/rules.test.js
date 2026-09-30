@@ -81,6 +81,32 @@ test("deleting a kid ends that kid's sessions", async (t) => {
   assert.deepEqual((await kid('GET', '/api/auth/status')).body, { required: true, session: null });
 });
 
+test('an each-kid chore can be for just some kids', async (t) => {
+  const f = await bootFamily();
+  t.after(() => f.srv.stop());
+  const music = (await f.admin('POST', '/api/chores', { title: 'Music', frequency: 'personal', kidIds: [f.ada.id] })).body;
+  const chore = async (id) => (await f.admin('GET', '/api/week')).body.chores.find((c) => c.id === id);
+  assert.deepEqual((await chore(music.id)).kidIds, [f.ada.id]);
+  const bo = await f.admin('POST', '/api/completions', { choreId: music.id, kidId: f.bo.id, date: '2024-05-01' });
+  assert.equal(bo.status, 400);
+  assert.deepEqual(bo.body, { error: '“Music” isn’t one of Bo’s chores' });
+  assert.equal((await f.admin('POST', '/api/completions', { choreId: music.id, kidId: f.ada.id, date: '2024-05-01' })).status, 201);
+  // Everyone picked means everyone, kids added later included; shared chores never keep a list.
+  await f.admin('PUT', `/api/chores/${music.id}`, { kidIds: [f.ada.id, f.bo.id] });
+  assert.equal((await chore(music.id)).kidIds, null);
+  const dishes = await f.admin('PUT', `/api/chores/${f.dishes.id}`, { kidIds: [f.ada.id] });
+  assert.equal(dishes.body.kid_ids, null);
+  // Other edits keep the list; switching to a shared chore drops it.
+  await f.admin('PUT', `/api/chores/${music.id}`, { kidIds: [f.ada.id] });
+  await f.admin('PUT', `/api/chores/${music.id}`, { title: 'Piano' });
+  assert.deepEqual((await chore(music.id)).kidIds, [f.ada.id]);
+  // A chore left for nobody when its kid is removed is paused, not handed to everyone.
+  await f.admin('DELETE', `/api/kids/${f.ada.id}`);
+  const after = await chore(music.id);
+  assert.equal(after.kidIds, null);
+  assert.equal(after.active, false);
+});
+
 test('the week grid can be asked for by start date', async (t) => {
   const srv = await bootServer();
   t.after(() => srv.stop());
