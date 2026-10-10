@@ -154,6 +154,21 @@ function restingUntil(chore, today) {
   return next > today ? next : null;
 }
 
+// 'Sweeten': a live temporary bonus (parent-set) on a chore, or null.
+function sweetener(chore, today) {
+  if (!chore.sweetenPoints || !chore.sweetenUntil || today > chore.sweetenUntil) return null;
+  return { points: chore.sweetenPoints, until: chore.sweetenUntil };
+}
+// Total a chore pays today (base + live sweetener).
+const payout = (chore, today) => chore.points + (sweetener(chore, today)?.points || 0);
+// "🧁 +150 until Sun, Oct 12"
+function sweetBadge(chore, today) {
+  const s = sweetener(chore, today);
+  if (!s) return '';
+  const day = new Date(s.until + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  return `<span class="badge text-bg-warning sweet-badge" title="Sweetened: +${s.points} extra until ${esc(day)}">🧁 +${s.points} · ${esc(day)}</span>`;
+}
+
 const whoLower = (chore) => (chore.kidIds ? choreWhoText(chore) : 'each kid');
 
 function freqBadgeHtml(chore) {
@@ -522,8 +537,8 @@ function boardItemHtml({ chore, done, note, late }, kid, today) {
   const noteHtml = note ? `<span class="board-note">${esc(note)}</span>` : '';
   const body = `
     <span class="board-check">${done ? `<i class="bi bi-${late ? 'clock-history' : 'check-lg'}"></i>` : ''}</span>
-    <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${noteHtml}</span>
-    <span class="board-pts">+${chore.points}</span>`;
+    <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${noteHtml}${sweetBadge(chore, today)}</span>
+    <span class="board-pts">+${payout(chore, today)}</span>`;
   if (!canActFor(kid.id)) {
     return `<div class="${cls}" title="Only ${esc(kid.name)} or a parent can check this">${body}</div>`;
   }
@@ -613,8 +628,8 @@ function sharedItemHtml(chore, today, hint) {
   const cls = `board-item${team.length ? ' done' : ''}${resting ? ' resting' : ''}`;
   const body = (note) => `
       <span class="board-check">${team.length ? '<i class="bi bi-check-lg"></i>' : resting ? '<i class="bi bi-hourglass-split"></i>' : ''}</span>
-      <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${note}</span>
-      <span class="board-pts">+${chore.points}</span>`;
+      <span class="board-text"><span class="board-title">${esc(chore.title)}</span>${note}${sweetBadge(chore, today)}</span>
+      <span class="board-pts">+${payout(chore, today)}</span>`;
   if (team.length) {
     const names = team.map((c) => `<span class="who-dot" style="background:${esc(c.kidColor)}"></span>${esc(c.kidEmoji)} ${esc(c.kidName)}`).join(' &nbsp;');
     const note = `<span class="board-note">${names} ${team.length > 1 ? 'did it together' : 'did it'}</span>`;
@@ -765,7 +780,7 @@ function loadWeek() {
   const row = (chore) => `<tr>
       <td class="chore-title-cell" title="${esc(scheduleText(chore))}">
         <div class="chore-name">${esc(chore.title)}</div>
-        <div class="chore-meta">${scopeIcon(chore)}<span class="chore-pts">${ptsLabel(chore.points)}</span></div>
+        <div class="chore-meta">${scopeIcon(chore)}<span class="chore-pts">${ptsLabel(payout(chore, today))}</span>${sweetBadge(chore, today)}</div>
       </td>
       ${chore.frequency === 'due_by' ? dueByCellsHtml(chore, dates, today) : choreCellsHtml(chore, dates, today)}
     </tr>`;
@@ -872,7 +887,7 @@ async function openCellPicker(choreId, date) {
   const chore = state.chores.find((c) => c.id === Number(choreId));
   if (!chore) return;
   const mine = myKidId();
-  pickCtx = { choreId: chore.id, date, points: chore.points, picked: new Set(mine === null ? [] : [mine]) };
+  pickCtx = { choreId: chore.id, date, points: payout(chore, date), picked: new Set(mine === null ? [] : [mine]) };
   const day = DAYS_FULL[new Date(date + 'T00:00:00').getDay()];
   $('#cellModalTitle').textContent = `Who did “${chore.title}”? — ${day}`;
   if (!state.kids.length) {
@@ -1183,10 +1198,12 @@ function loadChoresTab() {
             <div class="chore-row-meta">
               <span class="chore-pts">${ptsLabel(c.points)}</span>
               ${freqBadgeHtml(c)}
+              ${c.sweetenPoints && c.sweetenUntil ? `<span class="badge text-bg-warning">🧁 +${c.sweetenPoints} until ${esc(new Date(c.sweetenUntil + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</span>` : ''}
               ${c.active ? '' : '<span class="badge text-bg-light">paused</span>'}
             </div>
           </div>
           <div class="chore-row-actions">
+            <button class="btn btn-sm btn-outline-warning" data-sweetenchore="${c.id}" title="Sweeten — temporary bonus"><i class="bi bi-cake2"></i></button>
             <button class="btn btn-sm btn-outline-secondary" data-editchore="${c.id}" title="Edit"><i class="bi bi-pencil"></i></button>
             <button class="btn btn-sm btn-outline-danger" data-delchore="${c.id}" title="Delete"><i class="bi bi-trash"></i></button>
           </div>
@@ -1471,6 +1488,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const edit = e.target.closest('[data-editchore]');
     if (edit) openChoreEditModal(Number(edit.dataset.editchore));
+    const sweeten = e.target.closest('[data-sweetenchore]');
+    if (sweeten) openSweetenModal(Number(sweeten.dataset.sweetenchore));
   });
 
   $('#choresList').addEventListener('change', async (e) => {
@@ -1539,6 +1558,47 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       await api('/api/chores/' + chore.id, { method: 'DELETE' });
       toast('Chore deleted', 'secondary');
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
+  // ---- Sweeten chore modal ----
+  let sweetenCtx = null;
+  const sweetenModal = () => bootstrap.Modal.getOrCreateInstance('#sweetenModal');
+
+  function openSweetenModal(choreId) {
+    const chore = state.chores.find((c) => c.id === choreId);
+    if (!chore) return;
+    sweetenCtx = chore;
+    $('#sweetenChoreName').textContent = `“${chore.title}”`;
+    $('#sweetenPoints').value = chore.sweetenPoints || '';
+    // Default the deadline to the end of the current chart week.
+    $('#sweetenUntil').value = chore.sweetenUntil || dateStr(weekDates(0)[6]);
+    sweetenModal().show();
+  }
+
+  $('#sweetenForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!sweetenCtx) return;
+    const points = Number($('#sweetenPoints').value);
+    if (!(points >= 1)) { $('#sweetenPoints').focus(); return toast('How many bonus points?', 'warning'); }
+    try {
+      await api(`/api/chores/${sweetenCtx.id}/sweeten`, {
+        method: 'POST',
+        body: { points, until: $('#sweetenUntil').value },
+      });
+      sweetenModal().hide();
+      toast(`🧁 “${sweetenCtx.title}” sweetened by ${points}`);
+      await refreshWeek();
+    } catch (err) { toast(err.message, 'danger'); }
+  });
+
+  $('#sweetenClear').addEventListener('click', async () => {
+    if (!sweetenCtx) return;
+    try {
+      await api(`/api/chores/${sweetenCtx.id}/sweeten`, { method: 'POST', body: { points: 0 } });
+      sweetenModal().hide();
+      toast(`Sweetener cleared on “${sweetenCtx.title}”`, 'secondary');
       await refreshWeek();
     } catch (err) { toast(err.message, 'danger'); }
   });

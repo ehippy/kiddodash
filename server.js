@@ -277,6 +277,14 @@ function migrate() {
     console.log('migrated: each-kid chores can be for just some kids');
   }
 
+  if (!/sweeten_points\s+INTEGER/.test(tableSql('chores'))) {
+    // 'Sweeten': a parent piles a temporary bonus onto a chore. Both nullable —
+    // no rebuild needed. Expiry is checked at completion time, so an expired
+    // sweetener needs no cleanup job.
+    db.exec('ALTER TABLE chores ADD COLUMN sweeten_points INTEGER; ALTER TABLE chores ADD COLUMN sweeten_until TEXT;');
+    console.log('migrated: chores can be sweetened with a temporary bonus');
+  }
+
   const kidsSql = tableSql('kids');
   if (kidsSql && !/pin_hash\s+TEXT/.test(kidsSql)) {
     // Adding two nullable columns — no rebuild needed; kids without PINs simply
@@ -904,6 +912,31 @@ app.put('/api/chores/:id', requireAdmin, (req, res) => {
   res.json(prepare('SELECT * FROM chores WHERE id = ?').get(chore.id));
 });
 
+// --- Sweeten ---------------------------------------------------------------------
+// A parent piles a temporary bonus onto a chore ("sweeten" it) to make an
+// unloved job get done. The bonus applies to completions dated on or before
+// `until` (inclusive); after that the chore quietly reverts to its base price.
+
+function sweetenBonus(chore, date) {
+  if (!chore.sweeten_points || !chore.sweeten_until) return 0;
+  return date <= chore.sweeten_until ? chore.sweeten_points : 0;
+}
+
+// POST /api/chores/:id/sweeten  { points, until }  |  { points: 0 } to clear
+app.post('/api/chores/:id/sweeten', requireAdmin, (req, res) => {
+  const chore = prepare('SELECT * FROM chores WHERE id = ?').get(req.params.id);
+  if (!chore) return sendError(res, 404, 'Chore not found');
+  const pts = Math.round(Number(req.body?.points));
+  if (!Number.isFinite(pts) || pts < 0 || pts > 99999) return sendError(res, 400, 'Bonus must be 0–99999 (0 clears the sweetener)');
+  let until = null;
+  if (pts > 0) {
+    until = /^\d{4}-\d{2}-\d{2}$/.test(req.body?.until || '') ? req.body.until : null;
+    if (!until) return sendError(res, 400, 'Pick a last day for the bonus');
+  }
+  prepare('UPDATE chores SET sweeten_points = ?, sweeten_until = ? WHERE id = ?').run(pts > 0 ? pts : null, until, chore.id);
+  res.json(prepare('SELECT * FROM chores WHERE id = ?').get(chore.id));
+});
+
 app.delete('/api/chores/:id', requireAdmin, (req, res) => {
   try {
     // FKs are enforced, so this chore's completions cascade away with it.
@@ -1017,9 +1050,11 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
     if (already) return sendError(res, 409, 'Already done this week — undo it first');
   }
 
-  // Split the points across the team; any remainder goes to the first kids listed.
-  const base = Math.floor(chore.points / kids.length);
-  const extra = chore.points - base * kids.length;
+  // Split the points across the team; any remainder goes to the first kids
+  // listed. A live sweetener (temporary parent bonus) rides on top of the base.
+  const total = chore.points + sweetenBonus(chore, doneDate);
+  const base = Math.floor(total / kids.length);
+  const extra = total - base * kids.length;
   try {
     const completions = inTransaction(() =>
       kids.map((kid, i) => {
@@ -1124,6 +1159,8 @@ app.get('/api/week', (req, res) => {
       frequency: c.frequency,
       days: parseDays(c.days),
       cooldownDays: c.cooldown_days,
+      sweetenPoints: c.sweeten_points || null, // 'sweeten': temporary parent bonus
+      sweetenUntil: c.sweeten_until || null,   // last day (inclusive) it pays out
       kidIds: parseDays(c.kid_ids), // each-kid chores: null = every kid
       lastDone: lastDone.get(c.id) || null, // anytime jobs: most recent completion, any week
       active: !!c.active
