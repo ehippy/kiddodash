@@ -1024,10 +1024,11 @@ async function loadActivity() {
 function renderActivitySummary() {
   const byKid = new Map();
   for (const r of activityRows) {
-    const t = byKid.get(r.kidName) || { earned: 0, undone: 0, spent: 0, filled: 0 };
+    const t = byKid.get(r.kidName) || { earned: 0, undone: 0, spent: 0, penalties: 0, filled: 0 };
     if (r.action === 'done') t.earned += r.points;
     if (r.action === 'undo') t.undone -= r.points;
     if (r.action === 'redeem') t.spent -= r.points;
+    if (r.action === 'penalty') t.penalties -= r.points;
     if (r.action === 'done' && r.forDate && r.forDate !== dateStr(atDate(r.at))) t.filled++;
     byKid.set(r.kidName, t);
   }
@@ -1039,6 +1040,7 @@ function renderActivitySummary() {
           <div class="act-sum-line"><span>Earned</span><strong class="text-success">+${t.earned}</strong></div>
           <div class="act-sum-line"><span>Undone</span><strong>${t.undone ? '−' + t.undone : 0}</strong></div>
           <div class="act-sum-line"><span>Spent</span><strong class="text-danger">${t.spent ? '−' + t.spent : 0}</strong></div>
+          ${t.penalties ? `<div class="act-sum-line"><span>Penalties</span><strong class="text-danger">−${t.penalties}</strong></div>` : ''}
           ${t.filled ? `<div class="act-sum-line"><span>Logged on another day</span><strong>${t.filled}</strong></div>` : ''}
         </div></div>`;
     })
@@ -1070,8 +1072,11 @@ function renderActivityList() {
       html.push(`<div class="act-day">${day === today ? 'Today' : day === yesterday ? 'Yesterday' : esc(fmtDay(day))}</div>`);
     }
     const kid = state.kids.find((k) => k.id === r.kidId);
-    const icon = { done: 'check-circle-fill text-success', undo: 'arrow-counterclockwise act-undo-icon', redeem: 'gift-fill text-danger' }[r.action];
-    const verb = { done: '', undo: 'Undid ', redeem: 'Redeemed ' }[r.action];
+    const icon = {
+      done: 'check-circle-fill text-success', undo: 'arrow-counterclockwise act-undo-icon',
+      redeem: 'gift-fill text-danger', penalty: 'flag-fill text-danger',
+    }[r.action];
+    const verb = { done: '', undo: 'Undid ', redeem: 'Redeemed ', penalty: 'Penalty: ' }[r.action];
     const tags = [];
     // Logged on a different day than it counts for: late (filled in) or ahead of time.
     if (r.forDate && r.forDate !== day && r.action === 'done') {
@@ -1080,7 +1085,11 @@ function renderActivityList() {
       tags.push(`<span class="act-tag">for ${esc(fmtDay(r.forDate))}</span>`);
     }
     if (r.note) tags.push(`<span class="act-tag">${esc(r.note)}</span>`);
-    html.push(`<div class="act-row act-${r.action}">
+    if (r.bogus) tags.push('<span class="act-tag bogus"><i class="bi bi-flag-fill"></i> bogus</span>');
+    const flag = r.action === 'done' && !r.bogus
+      ? `<button class="btn btn-sm btn-link act-bogus" data-bogus="${r.id}" title="Didn’t do it: take the points back plus a ${BOGUS_PENALTY}-point penalty" aria-label="Mark bogus"><i class="bi bi-flag"></i></button>`
+      : '';
+    html.push(`<div class="act-row act-${r.action}${r.bogus ? ' is-bogus' : ''}">
         <span class="act-time">${when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
         <i class="bi bi-${icon} act-icon"></i>
         <div class="act-main">
@@ -1088,10 +1097,32 @@ function renderActivityList() {
           <div class="act-meta">${esc(activityWho(r))}${tags.length ? ' ' + tags.join(' ') : ''}</div>
         </div>
         <span class="act-pts ${r.points >= 0 ? 'plus' : 'minus'}">${r.points >= 0 ? '+' : '−'}${Math.abs(r.points)}</span>
+        ${flag}
       </div>`);
   }
   if (activityRows.length === 2000) html.push('<div class="act-day">Showing the newest 2000 — narrow the range to see more</div>');
   list.innerHTML = html.join('');
+}
+
+const BOGUS_PENALTY = 100; // matches the server
+
+async function markBogus(id) {
+  const r = activityRows.find((x) => x.id === id);
+  if (!r) return;
+  const ok = await confirmDialog(
+    `${r.kidName} didn’t really do “${r.subject}”? Take back the ${ptsLabel(r.points)} and deduct a ${ptsLabel(BOGUS_PENALTY)} penalty.`,
+    { ok: 'Mark bogus' }
+  );
+  if (!ok) return;
+  try {
+    const res = await api(`/api/activity/${id}/bogus`, { method: 'POST' });
+    toast(`🚩 ${r.kidName}: −${res.removed + res.penalty} (${ptsLabel(res.balance)} left)`, 'warning');
+  } catch (err) {
+    toast(err.message, 'danger');
+  }
+  loadActivity();
+  refreshWeek();
+  refreshRewards();
 }
 
 function downloadActivityCsv() {
@@ -1707,6 +1738,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ---- Activity ledger ----
   ['#actKid', '#actDays', '#actType'].forEach((sel) => $(sel).addEventListener('change', loadActivity));
   $('#actCsv').addEventListener('click', downloadActivityCsv);
+  $('#actList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-bogus]');
+    if (btn) markBogus(Number(btn.dataset.bogus));
+  });
 
   // ---- Custody schedule ----
   const saveCustody = async (patch, msg) => {

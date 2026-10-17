@@ -1349,6 +1349,31 @@ button.board-item:active {
   color: var(--kd-late-fg);
 }
 
+.act-row.act-penalty {
+  background: color-mix(in srgb, var(--kd-missed) 8%, transparent);
+}
+
+.act-row.is-bogus .act-main > div:first-child,
+.act-row.is-bogus .act-pts {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.act-tag.bogus {
+  border-color: var(--kd-missed);
+  color: var(--kd-missed);
+}
+
+.act-bogus {
+  flex-shrink: 0;
+  padding: 0 0.2rem;
+  color: var(--kd-muted);
+}
+
+.act-bogus:hover {
+  color: var(--kd-missed);
+}
+
 .act-pts {
   flex-shrink: 0;
   font-weight: 800;

@@ -78,7 +78,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS activity (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     at          TEXT NOT NULL DEFAULT (datetime('now')), -- UTC
-    action      TEXT NOT NULL CHECK (action IN ('done', 'undo', 'redeem')),
+    action      TEXT NOT NULL CHECK (action IN ('done', 'undo', 'redeem', 'penalty')),
     kid_id      INTEGER,
     kid_name    TEXT,
     subject     TEXT,     -- chore title or reward label
@@ -86,7 +86,8 @@ db.exec(`
     for_date    TEXT,     -- the day a check-off counts for
     actor       TEXT,     -- 'parent' | 'kid' | 'open' (no PINs set) | NULL (before the ledger)
     actor_name  TEXT,
-    note        TEXT
+    note        TEXT,
+    ref_id      INTEGER   -- penalty: the check-off entry it was for
   );
   CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
 
@@ -283,6 +284,35 @@ function migrate() {
     // sweetener needs no cleanup job.
     db.exec('ALTER TABLE chores ADD COLUMN sweeten_points INTEGER; ALTER TABLE chores ADD COLUMN sweeten_until TEXT;');
     console.log('migrated: chores can be sweetened with a temporary bonus');
+  }
+
+  const activitySql = tableSql('activity');
+  if (activitySql && !/'penalty'/.test(activitySql)) {
+    // Widen the CHECK for 'penalty' (a parent calls out a check-off that never
+    // happened) and add ref_id, linking a penalty to that check-off. Nothing
+    // references the ledger, so a plain rebuild will do.
+    db.exec(`
+      ALTER TABLE activity RENAME TO activity_old;
+      CREATE TABLE activity (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        at          TEXT NOT NULL DEFAULT (datetime('now')),
+        action      TEXT NOT NULL CHECK (action IN ('done', 'undo', 'redeem', 'penalty')),
+        kid_id      INTEGER,
+        kid_name    TEXT,
+        subject     TEXT,
+        points      INTEGER,
+        for_date    TEXT,
+        actor       TEXT,
+        actor_name  TEXT,
+        note        TEXT,
+        ref_id      INTEGER
+      );
+      INSERT INTO activity (id, at, action, kid_id, kid_name, subject, points, for_date, actor, actor_name, note)
+        SELECT id, at, action, kid_id, kid_name, subject, points, for_date, actor, actor_name, note FROM activity_old;
+      DROP TABLE activity_old;
+      CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
+    `);
+    console.log('migrated: activity ledger supports penalties');
   }
 
   const kidsSql = tableSql('kids');
@@ -975,12 +1005,12 @@ function actorOf(req) {
   return { actor: 'kid', actorName: kid?.name || null };
 }
 
-function logActivity(req, { action, kidId, kidName, subject, points, forDate = null, note = null }) {
+function logActivity(req, { action, kidId, kidName, subject, points, forDate = null, note = null, refId = null }) {
   const { actor, actorName } = actorOf(req);
   prepare(
-    `INSERT INTO activity (action, kid_id, kid_name, subject, points, for_date, actor, actor_name, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(action, kidId, kidName, subject, points, forDate, actor, actorName, note);
+    `INSERT INTO activity (action, kid_id, kid_name, subject, points, for_date, actor, actor_name, note, ref_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(action, kidId, kidName, subject, points, forDate, actor, actorName, note, refId);
 }
 
 // { kidId } or { kidIds: [...] } -> distinct positive ints
@@ -1248,14 +1278,54 @@ app.get('/api/activity', requireAdmin, (req, res) => {
   if (days > 0) { where.push(`at >= datetime('now', ?)`); args.push(`-${days} days`); }
   const kidId = parseInt(req.query.kidId, 10);
   if (kidId > 0) { where.push('kid_id = ?'); args.push(kidId); }
-  if (['done', 'undo', 'redeem'].includes(req.query.action)) { where.push('action = ?'); args.push(req.query.action); }
+  if (['done', 'undo', 'redeem', 'penalty'].includes(req.query.action)) { where.push('action = ?'); args.push(req.query.action); }
   const rows = prepare(
-    `SELECT * FROM activity ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC, id DESC LIMIT 2000`
+    `SELECT a.*, EXISTS (SELECT 1 FROM activity p WHERE p.action = 'penalty' AND p.ref_id = a.id) AS bogus
+       FROM activity a ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC, id DESC LIMIT 2000`
   ).all(...args);
   res.json(rows.map((r) => ({
     id: r.id, at: r.at, action: r.action, kidId: r.kid_id, kidName: r.kid_name, subject: r.subject,
     points: r.points, forDate: r.for_date, actor: r.actor, actorName: r.actor_name, note: r.note,
+    bogus: !!r.bogus,
   })));
+});
+
+// POST /api/activity/:id/bogus -> a parent calls out a check-off that never
+// happened: the check-off comes off (if it's still there) and the kid pays a
+// penalty on top. The penalty is booked as a spend, so it can take a balance
+// below zero.
+const BOGUS_PENALTY = 100;
+app.post('/api/activity/:id/bogus', requireAdmin, (req, res) => {
+  const entry = prepare('SELECT * FROM activity WHERE id = ?').get(req.params.id);
+  if (!entry) return sendError(res, 404, 'Entry not found');
+  if (entry.action !== 'done') return sendError(res, 400, 'Only check-offs can be marked bogus');
+  if (prepare("SELECT 1 FROM activity WHERE action = 'penalty' AND ref_id = ?").get(entry.id)) {
+    return sendError(res, 409, 'Already marked bogus');
+  }
+  const kid = prepare('SELECT * FROM kids WHERE id = ?').get(entry.kid_id);
+  if (!kid) return sendError(res, 404, 'Kid not found');
+  // The ledger has no completion id; kid + day + chore title pins it down.
+  const completion = prepare(
+    `SELECT c.* FROM completions c JOIN chores ch ON ch.id = c.chore_id
+      WHERE c.kid_id = ? AND c.done_date = ? AND ch.title = ? ORDER BY c.id DESC LIMIT 1`
+  ).get(kid.id, entry.for_date, entry.subject);
+  inTransaction(() => {
+    if (completion) {
+      prepare('DELETE FROM completions WHERE id = ?').run(completion.id);
+      logActivity(req, {
+        action: 'undo', kidId: kid.id, kidName: kid.name, subject: entry.subject, points: -completion.points,
+        forDate: entry.for_date, note: 'marked bogus',
+      });
+    }
+    const label = `Penalty: faked “${entry.subject}”`;
+    prepare('INSERT INTO redemptions (kid_id, reward_label, points) VALUES (?, ?, ?)').run(kid.id, label, BOGUS_PENALTY);
+    logActivity(req, {
+      action: 'penalty', kidId: kid.id, kidName: kid.name, subject: `faked “${entry.subject}”`, points: -BOGUS_PENALTY,
+      forDate: entry.for_date, refId: entry.id,
+    });
+  });
+  const balance = (earnedTotals().get(kid.id) || 0) - (spentTotals().get(kid.id) || 0);
+  res.json({ ok: true, removed: completion ? completion.points : 0, penalty: BOGUS_PENALTY, balance });
 });
 
 // --- Redemptions ------------------------------------------------------------------
