@@ -1042,6 +1042,37 @@ button.board-item:active {
   font-weight: 700;
 }
 
+.login-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.login-key {
+  font-size: 1.5rem;
+  font-weight: 700;
+  min-height: 3.5rem;
+  border-radius: 14px;
+  background: var(--kd-bg);
+  border: 1px solid var(--bs-border-color);
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.login-key:active { transform: scale(0.96); }
+.login-key-fn { font-size: 1.25rem; }
+.login-key.btn-primary { background: var(--bs-primary); border-color: var(--bs-primary); color: #fff; }
+
+/* Short landscape screens (Nest Hub is 1024x600): tighten so the keypad fits. */
+@media (max-height: 640px) {
+  .login-card { padding: 1rem 1.25rem; }
+  .login-logo { font-size: 1.75rem; margin-bottom: 0.15rem; }
+  .login-card > p { margin-bottom: 0.5rem !important; }
+  .login-key { min-height: 3rem; font-size: 1.35rem; }
+  .login-keypad { gap: 0.4rem; }
+}
+
 @keyframes login-card-in {
   from { opacity: 0; transform: translateY(6px) scale(0.98); }
   to { opacity: 1; transform: none; }

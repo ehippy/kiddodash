@@ -334,9 +334,25 @@ function onPinChanged() {
   }
 }
 
+// Touch screens use the on-screen keypad; focusing the input there would pop a
+// system keyboard (which on a cast Nest Hub doesn't even deliver digits).
+const isTouchScreen = () => matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+
+function focusLoginPin() {
+  if (!isTouchScreen()) $('#loginPin').focus();
+}
+
 function showLogin(required) {
   $('#loginOverlay').style.display = required ? 'flex' : 'none';
-  if (required) $('#loginPin').focus();
+  if (required) focusLoginPin();
+}
+
+function pressLoginKey(key) {
+  const input = $('#loginPin');
+  if (key === 'back') input.value = input.value.slice(0, -1);
+  else if (input.value.length < input.maxLength) input.value += key;
+  else return;
+  onPinChanged();
 }
 
 async function refreshAuth() {
@@ -1806,6 +1822,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ---- Auth ----
   $('#loginPin').addEventListener('input', onPinChanged);
+  if (isTouchScreen()) $('#loginPin').setAttribute('inputmode', 'none');
+  $('#loginKeypad').addEventListener('click', (e) => {
+    const key = e.target.closest('[data-key]')?.dataset.key;
+    if (key) pressLoginKey(key);
+  });
 
   let loggingIn = false;
   $('#loginForm').addEventListener('submit', async (e) => {
@@ -1823,7 +1844,7 @@ document.addEventListener('DOMContentLoaded', () => {
       err.textContent = e2.message;
       err.classList.remove('d-none');
       $('#loginPin').value = '';
-      $('#loginPin').focus();
+      focusLoginPin();
       const card = $('#loginCard');
       card.classList.remove('shake');
       // restart the animation even if it's still mid-play from a prior error

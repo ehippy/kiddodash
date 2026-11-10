@@ -406,11 +406,26 @@
       <h5 class="login-title mb-1">KiddoDash</h5>
       <p class="text-muted small mb-3">Enter your PIN to sign in</p>
       <form id="loginForm" autocomplete="off">
-        <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autofocus
+        <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off"
                class="form-control form-control-lg text-center login-pin-input mb-2" id="loginPin"
                placeholder="PIN" maxlength="8">
         <div class="text-danger small mb-2 d-none" id="loginError"></div>
-        <button class="btn btn-primary w-100" type="submit" id="loginSubmitBtn">Sign in</button>
+        <!-- On-screen keypad: cast receivers (e.g. a Nest Hub via DashCast) show a
+             system number pad that never delivers digits, so taps go through this. -->
+        <div class="login-keypad" id="loginKeypad" aria-label="PIN keypad">
+          <button type="button" class="btn login-key" data-key="1">1</button>
+          <button type="button" class="btn login-key" data-key="2">2</button>
+          <button type="button" class="btn login-key" data-key="3">3</button>
+          <button type="button" class="btn login-key" data-key="4">4</button>
+          <button type="button" class="btn login-key" data-key="5">5</button>
+          <button type="button" class="btn login-key" data-key="6">6</button>
+          <button type="button" class="btn login-key" data-key="7">7</button>
+          <button type="button" class="btn login-key" data-key="8">8</button>
+          <button type="button" class="btn login-key" data-key="9">9</button>
+          <button type="button" class="btn login-key login-key-fn" data-key="back" aria-label="Delete"><i class="bi bi-backspace"></i></button>
+          <button type="button" class="btn login-key" data-key="0">0</button>
+          <button type="submit" class="btn btn-primary login-key" id="loginSubmitBtn" aria-label="Sign in"><i class="bi bi-arrow-right"></i></button>
+        </div>
       </form>
     </div>
   </div>
