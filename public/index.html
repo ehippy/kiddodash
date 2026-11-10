@@ -14,6 +14,11 @@
       var dark = mode ? mode === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
       document.documentElement.setAttribute('data-kd-theme', palette || 'grape');
+      if (/^\/kiosk\/?$/.test(location.pathname)) {
+        var h = new Date().getHours();
+        document.documentElement.classList.add('kiosk');
+        document.documentElement.setAttribute('data-bs-theme', h >= 19 || h < 7 ? 'dark' : 'light');
+      }
     })();
   </script>
   <link href="/vendor/bootstrap.min.css" rel="stylesheet">
@@ -60,6 +65,12 @@
     </div>
   </div>
 </nav>
+
+<!-- Kiosk header (only on /kiosk): clock and date -->
+<header class="kiosk-bar" id="kioskBar">
+  <div class="kiosk-time" id="kioskTime"></div>
+  <div class="kiosk-date" id="kioskDate"></div>
+</header>
 
 <main class="container py-4 app-main">
 
@@ -260,6 +271,17 @@
             </form>
             <p class="text-muted small mt-2 mb-0">Unlocks everything: chores, kids, rewards, the activity log, and undoing
               anyone's check-offs. Set this before giving kids their own PINs.</p>
+          </div>
+        </div>
+        <div class="card shadow-sm mt-3">
+          <div class="card-header"><i class="bi bi-display me-1"></i>Kitchen screen</div>
+          <div class="card-body">
+            <div class="input-group input-group-sm">
+              <input type="text" class="form-control" id="kioskLink" readonly value="Loading…">
+              <button class="btn btn-outline-primary" type="button" id="kioskLinkCopy" title="Copy link"><i class="bi bi-clipboard"></i></button>
+            </div>
+            <p class="text-muted small mt-2 mb-0">A Today-only view for a shared display such as a Nest Hub. Anyone at it can
+              check chores off and undo them for today, without a PIN. Keep the link to yourself.</p>
           </div>
         </div>
       </div>

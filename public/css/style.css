@@ -1542,3 +1542,89 @@ button.board-item:active {
   gap: 0.5rem;
   margin-top: 0.1rem;
 }
+
+/* ============ Kiosk (/kiosk): a kitchen display such as a Nest Hub ============ */
+/* Today board only, sized to the screen (Nest Hub: 1024x600): a slim clock bar,
+   then one full-height column per kid / shared / bonus card, each scrolling on
+   its own so nothing on the page itself scrolls. */
+
+.kiosk-bar { display: none; }
+
+.kiosk, .kiosk body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.kiosk body { display: flex; flex-direction: column; }
+.kiosk .app-navbar,
+.kiosk #pane-chart > .d-flex:first-child,
+.kiosk #todayLabel,
+.kiosk #todayHelp,
+.kiosk #weekView { display: none !important; }
+
+.kiosk .kiosk-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  padding: 0.55rem 1rem 0.2rem;
+  flex-shrink: 0;
+}
+.kiosk-time { font-size: 2rem; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
+.kiosk-date { font-size: 1.05rem; font-weight: 600; color: var(--kd-muted); }
+.kiosk .app-main {
+  flex: 1;
+  min-height: 0;
+  max-width: none;
+  padding: 0.5rem 0.75rem 0.75rem !important;
+}
+.kiosk .tab-content, .kiosk #pane-chart, .kiosk #todayView { height: 100%; }
+.kiosk .tab-content > :not(#pane-chart) { display: none !important; }
+
+.kiosk #todayBoard {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0.6rem;
+  height: 100%;
+  margin: 0;
+}
+.kiosk #todayBoard > * { width: auto; max-width: none; padding: 0; margin: 0; min-height: 0; }
+
+.kiosk .kid-board {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.7rem 0.6rem 0.6rem;
+}
+.kiosk .kid-board-head { margin-bottom: 0.45rem; gap: 0.55rem; }
+.kiosk .kid-board-name { font-size: 1.2rem; }
+.kiosk .kid-board-status { font-size: 0.8rem; }
+.kiosk .kid-board-progress { margin-bottom: 0.55rem; flex-shrink: 0; }
+.kiosk .board-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  gap: 0.4rem;
+  /* fade the last row so "there's more below" reads at a glance */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+  padding-bottom: 20px;
+}
+.kiosk .board-list::-webkit-scrollbar { display: none; }
+.kiosk .board-item { min-height: 58px; padding: 0.45rem 0.6rem; gap: 0.55rem; touch-action: manipulation; }
+.kiosk .board-title { font-size: 1rem; }
+.kiosk .board-check { width: 30px; height: 30px; }
+
+.kiosk footer, .kiosk .app-footer { display: none !important; }
+.kiosk .board-list > * { flex-shrink: 0; } /* rows keep their height; the column scrolls */
+.kiosk .kid-board-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Shared/bonus hints ("whoever does it gets the points") are noise on a narrow
+   column; who did a finished one, and when a resting one is back, stay. */
+.kiosk .shared-board .board-item:not(.done):not(.resting) .board-note { display: none; }
+.kiosk .board-pts { padding: 2px 7px; }
+.kiosk .board-title { overflow-wrap: anywhere; }

@@ -25,6 +25,12 @@ const authToken = {
 };
 
 const $ = (sel) => document.querySelector(sel);
+
+// Kitchen-display mode (/kiosk?key=…): Today board only, and taps check chores
+// off with no PIN; the key (from Settings → Access) lets the server allow that.
+const KIOSK = document.documentElement.classList.contains('kiosk');
+const KIOSK_KEY = KIOSK ? new URLSearchParams(location.search).get('key') : null;
+const isNight = (d = new Date()) => d.getHours() >= 19 || d.getHours() < 7;
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
@@ -36,6 +42,7 @@ async function api(path, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const token = authToken.get();
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (KIOSK_KEY) headers['X-Kiosk-Key'] = KIOSK_KEY;
   const res = await fetch(path, {
     ...options,
     headers,
@@ -343,6 +350,7 @@ function focusLoginPin() {
 }
 
 function showLogin(required) {
+  if (KIOSK) required = false; // the kitchen screen never signs in
   $('#loginOverlay').style.display = required ? 'flex' : 'none';
   if (required) focusLoginPin();
 }
@@ -393,7 +401,9 @@ function choreWhoText(chore) {
   const names = choreKids(chore).map((k) => k.name);
   return names.length === 1 ? `${names[0]} only` : names.join(' & ') || 'Nobody';
 }
-const canActFor = (kidId) => isAdmin() || myKidId() === kidId;
+// The kitchen screen acts for everyone, as long as its link has the key.
+const kioskActs = () => KIOSK && (!!KIOSK_KEY || !state.authRequired);
+const canActFor = (kidId) => kioskActs() || isAdmin() || myKidId() === kidId;
 const ptsLabel = (n) => `${n} pt${n === 1 ? '' : 's'}`;
 
 // Plain-language schedule, shown as a tooltip and under titles on the Today board.
@@ -586,7 +596,8 @@ function renderTodayBoard() {
     return;
   }
   // A signed-in kid sees their own card first.
-  const kids = [...state.kids].sort((a, b) => (b.id === myKidId()) - (a.id === myKidId()));
+  // (Not on the kiosk: columns there stay put while kids sign in and out.)
+  const kids = KIOSK ? state.kids : [...state.kids].sort((a, b) => (b.id === myKidId()) - (a.id === myKidId()));
   const cards = kids.map((kid) => {
     const items = todayItemsForKid(kid, today, dates);
     const doneCount = items.filter((i) => i.done).length;
@@ -657,7 +668,7 @@ function sharedItemHtml(chore, today, hint) {
   if (resting) {
     return `<div class="${cls}" title="Resting until ${esc(fmtDay(resting))}">${body(`<span class="board-note">available again ${esc(fmtDay(resting))}</span>`)}</div>`;
   }
-  const canAct = isAdmin() || myKidId() !== null;
+  const canAct = kioskActs() || isAdmin() || myKidId() !== null;
   const note = `<span class="board-note">${esc(hint)}${chore.frequency === 'anytime' ? ` · ${esc(cooldownText(chore.cooldownDays))}` : ''}</span>`;
   return canAct
     ? `<button class="${cls}" data-chore="${chore.id}" data-date="${today}" title="Tap when done">${body(note)}</button>`
@@ -876,8 +887,10 @@ function celebrate(kids) {
   setTimeout(() => confetti({ ...opts, particleCount: 120, spread: 100, origin: { y: 0.6 } }), 250);
 }
 
-async function completeChore(choreId, kidIds, date) {
+async function completeChore(choreId, kidIds, date, fromEl = null) {
   const ids = [].concat(kidIds);
+  // Where the tap was, measured now: the board re-renders before the confetti.
+  const tapRect = KIOSK ? (fromEl || document.querySelector(`#todayBoard [data-chore="${choreId}"]`))?.getBoundingClientRect() : null;
   const doneBefore = kidsDoneToday();
   try {
     const done = await api('/api/completions', { method: 'POST', body: { choreId, kidIds: ids, date } });
@@ -885,7 +898,8 @@ async function completeChore(choreId, kidIds, date) {
     await refreshWeek();
     const doneAfter = kidsDoneToday();
     const finished = state.kids.filter((k) => doneAfter.has(k.id) && !doneBefore.has(k.id));
-    celebrate(finished);
+    if (finished.length) celebrate(finished);
+    else if (tapRect) popConfetti(tapRect, who);
     toast(
       (who.length > 1
         ? `🤝 ${who.map((k) => k.name).join(' & ')} teamed up — ${ptsLabel(done.completions[0].points)} each!`
@@ -1066,6 +1080,7 @@ function renderActivitySummary() {
 function activityWho(r) {
   if (r.actor === 'parent') return 'logged by a parent';
   if (r.actor === 'kid') return `logged by ${r.actorName || 'a kid'}`;
+  if (r.actor === 'kiosk') return 'logged on the kitchen screen';
   if (r.actor === 'open') return 'logged with no sign-in';
   return 'from before the ledger';
 }
@@ -1398,7 +1413,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const direct = e.target.closest('[data-complete]');
     if (direct) {
       direct.disabled = true; // no double-taps while the request is in flight
-      return completeChore(Number(direct.dataset.chore), [Number(direct.dataset.kid)], direct.dataset.date);
+      return completeChore(Number(direct.dataset.chore), [Number(direct.dataset.kid)], direct.dataset.date, direct);
     }
     const cell = e.target.closest('[data-chore]');
     if (cell) openCellPicker(cell.dataset.chore, cell.dataset.date);
@@ -1883,6 +1898,20 @@ document.addEventListener('DOMContentLoaded', () => {
       err.classList.remove('d-none');
     }
   });
+  // Settings → Access: the kitchen screen's link (admin only; fetched when shown)
+  const loadKioskLink = async () => {
+    if (!state.authRequired || !isAdmin()) return void ($('#kioskLink').value = location.origin + '/kiosk');
+    try {
+      const { key } = await api('/api/kiosk-key');
+      $('#kioskLink').value = `${location.origin}/kiosk?key=${encodeURIComponent(key)}`;
+    } catch { $('#kioskLink').value = 'Sign in as a parent to see the link'; }
+  };
+  $('#tab-settings').addEventListener('shown.bs.tab', loadKioskLink);
+  $('#kioskLinkCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('#kioskLink').value); toast('Link copied'); }
+    catch { $('#kioskLink').select(); }
+  });
+
   $('#adminPinForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const pin = $('#adminPinInput').value.trim();
@@ -1983,7 +2012,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // dialog is open or the tab is hidden, so nothing moves under someone's finger.
   const liveRefresh = () => {
     if (document.visibilityState !== 'visible' || document.querySelector('.modal.show')) return;
-    if (state.authRequired && !state.session) return;
+    if (state.authRequired && !state.session && !KIOSK) return;
     refreshWeek().catch(() => {});
     refreshIdeas().catch(() => {});
   };
@@ -1992,6 +2021,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initial load — auth first, then settings (the chart's week-start-day
   // lives there), and only then the chart/rewards that depend on it.
+  if (KIOSK) setupKiosk();
   refreshAuth()
     .then(() => api('/api/settings'))
     .then((settings) => {
@@ -2004,7 +2034,7 @@ document.addEventListener('DOMContentLoaded', () => {
     .then(() => {
       // Open the screen the URL names; a reload mid-dialog leaves a stale dialog entry.
       if (history.state?.modal) history.replaceState(null, '', location.href);
-      applyRoute(location.hash || routeHash());
+      applyRoute(KIOSK ? '' : location.hash || routeHash());
     })
     .catch((err) => toast('Failed to load: ' + err.message, 'danger'));
 });
@@ -2035,6 +2065,7 @@ const THEMES = [
   const mode = () => store.get('kiddodash-theme') || 'auto';
   const applyMode = () => {
     const m = mode();
+    if (KIOSK) return root.setAttribute('data-bs-theme', isNight() ? 'dark' : 'light'); // evenings dim on the kitchen screen
     root.setAttribute('data-bs-theme', m === 'auto' ? (mq.matches ? 'dark' : 'light') : m);
   };
   const palette = () => (THEMES.some((t) => t.id === store.get('kiddodash-palette')) ? store.get('kiddodash-palette') : 'grape');
@@ -2053,6 +2084,7 @@ const THEMES = [
   }
 
   mq.addEventListener('change', applyMode); // only matters in auto
+  if (KIOSK) setInterval(applyMode, 60 * 1000);
 
   document.addEventListener('DOMContentLoaded', () => {
     root.setAttribute('data-kd-theme', palette());
@@ -2073,6 +2105,30 @@ const THEMES = [
     );
   });
 })();
+
+/* ============================ Kiosk ============================ */
+
+function setupKiosk() {
+  authToken.clear(); // the kitchen screen is never a signed-in person
+  const tick = () => {
+    const now = new Date();
+    $('#kioskTime').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    $('#kioskDate').textContent = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+  tick();
+  setInterval(tick, 10 * 1000);
+}
+
+// A quick burst from the chore that was just tapped, in the kid's colour.
+function popConfetti(r, kids) {
+  if (typeof confetti !== 'function') return;
+  confetti({
+    particleCount: 45, spread: 65, startVelocity: 28, gravity: 1.1, ticks: 120, scalar: 0.9,
+    origin: { x: (r.left + r.width / 2) / innerWidth, y: (r.top + r.height / 2) / innerHeight },
+    colors: kids.map((k) => k.color).concat(['#ffd43b', '#ffffff']),
+    zIndex: 2100, disableForReducedMotion: true,
+  });
+}
 
 /* ============================ Confirm dialog ============================ */
 

@@ -84,7 +84,7 @@ db.exec(`
     subject     TEXT,     -- chore title or reward label
     points      INTEGER,  -- signed: + earned, - undone or spent
     for_date    TEXT,     -- the day a check-off counts for
-    actor       TEXT,     -- 'parent' | 'kid' | 'open' (no PINs set) | NULL (before the ledger)
+    actor       TEXT,     -- 'parent' | 'kid' | 'kiosk' (kitchen screen) | 'open' (no PINs set) | NULL (before the ledger)
     actor_name  TEXT,
     note        TEXT,
     ref_id      INTEGER   -- penalty: the check-off entry it was for
@@ -413,6 +413,33 @@ function loadAuthSettings() {
   return { adminPinHash: s.adminPinHash || null, adminPinSalt: s.adminPinSalt || null };
 }
 
+// Kitchen-screen key: the /kiosk link carries it (`/kiosk?key=…`) and the page
+// sends it back as X-Kiosk-Key. It lets that screen check chores off and undo
+// them, for today only, with no PIN; nothing else. Generated on first use and
+// kept in settings.json; never returned by /api/settings.
+function kioskKey() {
+  const s = loadSettings();
+  if (s.kioskKey) return s.kioskKey;
+  s.kioskKey = crypto.randomBytes(18).toString('base64url');
+  saveSettings(s);
+  return s.kioskKey;
+}
+
+function isKiosk(req) {
+  const given = String(req.headers['x-kiosk-key'] || '');
+  const key = given && kioskKey();
+  return !!key && given.length === key.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(key));
+}
+
+// The request is acting as the kitchen screen (and not as a signed-in person).
+const viaKiosk = (req) => authConfigured() && !getSession(req) && isKiosk(req);
+
+// Settings as the client may see them: no PIN hash, no kiosk key.
+function publicSettings(s) {
+  const { adminPinHash, adminPinSalt, kioskKey: _key, ...rest } = s;
+  return rest;
+}
+
 function setAdminPin(pin) {
   const s = loadSettings();
   const { salt, hash } = makePinHash(pin);
@@ -638,6 +665,8 @@ function inTransaction(fn) {
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+// Kitchen-display mode (e.g. a Nest Hub): the same app, Today board only.
+app.get('/kiosk', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const prepare = (sql) => db.prepare(sql);
 
@@ -660,9 +689,11 @@ function requireAdmin(req, res, next) {
 
 // Kid sessions may only touch completions/redemptions for themselves; `getKidId`
 // extracts whose record this request is about (body or lookup by route param).
-function requireAdminOrSelf(getKidId) {
+// `{ kiosk: true }` also lets the kitchen screen through (see kioskKey).
+function requireAdminOrSelf(getKidId, { kiosk = false } = {}) {
   return (req, res, next) => {
     if (!authConfigured()) return next();
+    if (kiosk && viaKiosk(req)) return next();
     const session = getSession(req);
     if (!session) return sendError(res, 401, 'Sign in required');
     if (session.role === 'admin') return next();
@@ -999,6 +1030,7 @@ app.get('/api/completions', (req, res) => {
 // Who is doing this, for the ledger.
 function actorOf(req) {
   if (!authConfigured()) return { actor: 'open', actorName: null };
+  if (viaKiosk(req)) return { actor: 'kiosk', actorName: null };
   const s = getSession(req);
   if (s?.role === 'admin') return { actor: 'parent', actorName: null };
   const kid = s?.kidId && prepare('SELECT name FROM kids WHERE id = ?').get(s.kidId);
@@ -1031,7 +1063,7 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
   const ids = teamIds(req.body);
   const me = getSession(req)?.kidId;
   return ids.includes(me) ? me : ids[0] ?? null;
-}), (req, res) => {
+}, { kiosk: true }), (req, res) => {
   const { choreId, date } = req.body || {};
   const chore = prepare('SELECT * FROM chores WHERE id = ? AND active = 1').get(choreId);
   if (!chore) return sendError(res, 404, 'Chore not found');
@@ -1047,7 +1079,7 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
   const doneDate = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : todayStr();
   // Kids check off today only; filling in other days is a parent's call. ±1 day
   // of slack because the server clock (often UTC) and the tablet's may disagree.
-  if (getSession(req)?.role === 'kid') {
+  if (getSession(req)?.role === 'kid' || viaKiosk(req)) {
     const drift = Math.abs(Date.parse(doneDate + 'T00:00:00Z') - Date.parse(todayStr() + 'T00:00:00Z')) / 86400000;
     if (drift > 1) return sendError(res, 403, 'Only a parent can fill in other days');
   }
@@ -1110,12 +1142,17 @@ app.post('/api/completions', requireAdminOrSelf((req) => {
 });
 
 // DELETE /api/completions/:id
-app.delete('/api/completions/:id', requireAdminOrSelf(completionKidId), (req, res) => {
+app.delete('/api/completions/:id', requireAdminOrSelf(completionKidId, { kiosk: true }), (req, res) => {
   const row = prepare(
     `SELECT c.*, k.name AS kid_name, ch.title FROM completions c
        JOIN kids k ON k.id = c.kid_id JOIN chores ch ON ch.id = c.chore_id WHERE c.id = ?`
   ).get(req.params.id);
   if (!row) return sendError(res, 404, 'Completion not found');
+  if (viaKiosk(req)) {
+    // Same ±1 day of clock slack as checking off.
+    const drift = Math.abs(Date.parse(row.done_date + 'T00:00:00Z') - Date.parse(todayStr() + 'T00:00:00Z')) / 86400000;
+    if (drift > 1) return sendError(res, 403, 'Only a parent can change other days');
+  }
   inTransaction(() => {
     prepare('DELETE FROM completions WHERE id = ?').run(row.id);
     logActivity(req, {
@@ -1438,10 +1475,10 @@ app.get('/api/totals', (req, res) => {
 
 // --- Settings -----------------------------------------------------------------------
 
-app.get('/api/settings', (req, res) => {
-  const { adminPinHash, adminPinSalt, ...publicSettings } = loadSettings();
-  res.json(publicSettings);
-});
+app.get('/api/settings', (req, res) => res.json(publicSettings(loadSettings())));
+
+// The kitchen-screen link's key, for the parent's Settings → Access card.
+app.get('/api/kiosk-key', requireAdmin, (req, res) => res.json({ key: kioskKey() }));
 
 app.put('/api/settings', requireAdmin, (req, res) => {
   const current = loadSettings();
@@ -1468,8 +1505,7 @@ app.put('/api/settings', requireAdmin, (req, res) => {
     next.custody = { enabled: !!c.enabled && !!c.homeStart, homeStart: c.homeStart || null, exceptions };
   }
   saveSettings(next);
-  const { adminPinHash, adminPinSalt, ...publicSettings } = next; // never echo the PIN hash
-  res.json(publicSettings);
+  res.json(publicSettings(next)); // never echo the PIN hash or kiosk key
 });
 
 bootstrapPinsFromEnv();
