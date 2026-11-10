@@ -63,7 +63,7 @@ def main():
     cast.wait()
     dash = DashCastController()
     cast.register_handler(dash)
-    log.info("connected to %s (%s); windows %s", cast.cast_info.friendly_name, host,
+    log.info("connected to the Hub at %s; windows %s", host,
              ", ".join(f"{a:%H:%M}-{b:%H:%M}" for a, b in windows))
 
     was_wanted = False   # previous tick was inside a window on a home day
