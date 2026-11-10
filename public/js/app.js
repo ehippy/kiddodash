@@ -620,7 +620,9 @@ function renderTodayBoard() {
         </div>
         <div class="kid-board-progress"><span style="width:${pct}%"></span></div>
         <div class="board-list">
-          ${items.map((i) => boardItemHtml(i, kid, today)).join('') || '<div class="board-empty">No chores for you today 🎉</div>'}
+          ${KIOSK && doneCount === items.length
+            ? kioskBonusHtml(kid, today) + (items.length ? `<div class="kiosk-section-head">Done today</div>${items.map((i) => boardItemHtml(i, kid, today)).join('')}` : '')
+            : items.map((i) => boardItemHtml(i, kid, today)).join('') || '<div class="board-empty">No chores for you today 🎉</div>'}
         </div>
       </div>
     </div>`;
@@ -644,8 +646,26 @@ function renderTodayBoard() {
       </div>
     </div>`;
   if (shared.length) cards.push(sharedCard('Shared', 'Anyone can do these — or team up', 'people-fill', shared, 'whoever does it gets the points'));
-  if (bonus.length) cards.push(sharedCard('Bonus jobs', 'Extra points, any time', 'stars', bonus, 'team up and split the points'));
+  // The kitchen screen has no Bonus column: a kid's bonus jobs appear in their own
+  // column once their list is done (kioskBonusHtml).
+  if (bonus.length && !KIOSK) cards.push(sharedCard('Bonus jobs', 'Extra points, any time', 'stars', bonus, 'team up and split the points'));
   board.innerHTML = cards.join('');
+}
+
+// Kitchen screen: bonus jobs at the bottom of a kid's finished column. Tapping one
+// credits that kid straight away; ones resting, or done today by someone else, are left out.
+function kioskBonusHtml(kid, today) {
+  const rows = state.chores
+    .filter((c) => c.active && c.frequency === 'anytime')
+    .map((chore) => {
+      const team = Object.values(state.currentGrid?.[chore.id]?.[today] || {});
+      const mine = team.find((c) => c.kidId === kid.id);
+      if (team.length && !mine) return '';
+      if (!team.length && restingUntil(chore, today)) return '';
+      return boardItemHtml({ chore, done: mine || null, note: '', late: false }, kid, today);
+    })
+    .join('');
+  return rows ? `<div class="kiosk-section-head kiosk-bonus-head"><i class="bi bi-stars"></i> Bonus jobs</div>${rows}` : '';
 }
 
 // One shared chore or bonus job on the Today board.
