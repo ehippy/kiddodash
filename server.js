@@ -1477,6 +1477,24 @@ app.get('/api/totals', (req, res) => {
 
 app.get('/api/settings', (req, res) => res.json(publicSettings(loadSettings())));
 
+// Shared custody, same rule as the client's isAway(): alternating 7-day stretches
+// starting (home) on custody.homeStart, with single-date exceptions.
+function isAwayOn(ds, custody) {
+  if (!custody?.enabled || !custody.homeStart) return false;
+  const pinned = custody.exceptions?.[ds];
+  if (pinned) return pinned === 'away';
+  const days = Math.round((Date.parse(ds + 'T00:00:00Z') - Date.parse(custody.homeStart + 'T00:00:00Z')) / 86400000);
+  return Math.floor(days / 7) % 2 !== 0;
+}
+
+// GET /api/schedule?date=YYYY-MM-DD -> { date, home }: are the kids here that day?
+// For helpers like the kitchen-screen caster; pass the date in local time (the
+// server clock may be UTC).
+app.get('/api/schedule', (req, res) => {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayStr();
+  res.json({ date, home: !isAwayOn(date, loadSettings().custody) });
+});
+
 // The kitchen-screen link's key, for the parent's Settings → Access card.
 app.get('/api/kiosk-key', requireAdmin, (req, res) => res.json({ key: kioskKey() }));
 

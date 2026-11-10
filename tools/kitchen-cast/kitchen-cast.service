@@ -1,0 +1,14 @@
+# systemd --user unit: keeps the KiddoDash board up on the kitchen Nest Hub.
+# Install: see tools/kitchen-cast/README.md
+[Unit]
+Description=KiddoDash kitchen screen caster (Nest Hub)
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/kiddodash/kitchen-cast.env
+ExecStart=%h/.local/share/pipx/venvs/catt/bin/python -u %h/Projects/kiddodash/tools/kitchen-cast/kitchen_cast.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

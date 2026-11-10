@@ -72,3 +72,19 @@ test('the kiosk can’t touch other days or anything beyond check-offs', async (
   assert.equal((await call(s, 'GET', '/api/kiosk-key', { key })).status, 401);
   await s.stop();
 });
+
+test('schedule: kids are home unless custody says away (alternating weeks, exceptions win)', async () => {
+  const { s, admin } = await bootHousehold();
+  const home = async (date) => (await call(s, 'GET', `/api/schedule?date=${date}`)).body.home;
+  assert.equal(await home('2026-11-09'), true, 'no custody configured: always home');
+  const custody = { enabled: true, homeStart: '2026-11-02', exceptions: { '2026-11-12': 'home', '2026-11-04': 'away' } };
+  assert.equal((await call(s, 'PUT', '/api/settings', { token: admin, body: { custody } })).status, 200);
+  assert.equal(await home('2026-11-02'), true); // first home week
+  assert.equal(await home('2026-11-08'), true);
+  assert.equal(await home('2026-11-09'), false); // away week
+  assert.equal(await home('2026-11-12'), true); // pinned home
+  assert.equal(await home('2026-11-04'), false); // pinned away
+  assert.equal(await home('2026-11-16'), true); // home again
+  assert.equal(await home('2026-10-26'), false); // the week before the start is away
+  await s.stop();
+});
