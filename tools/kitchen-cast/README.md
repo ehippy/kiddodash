@@ -24,7 +24,7 @@ ENV
 chmod 600 ~/.config/kiddodash/kitchen-cast.env
 ln -sf ~/Projects/kiddodash/tools/kitchen-cast/kitchen-cast.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now kitchen-cast
-journalctl --user -u kitchen-cast -f   # watch what it does
+systemctl --user status kitchen-cast   # recent log lines (or: journalctl --user -u kitchen-cast -f)
 ```
 
 Change the env file, then `systemctl --user restart kitchen-cast`.
